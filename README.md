@@ -86,7 +86,7 @@ firebase deploy --project YOUR_FIREBASE_PROJECT_ID --only firestore,storage
 `YOUR_FIREBASE_PROJECT_ID`는 본인 프로젝트 ID로 교체합니다. 이 저장소는 기본 배포 프로젝트를 지정하지 않으므로 명령에 `--project`를 명시하세요.
 Firestore는 `firestore.rules`와 `firestore.indexes.json`, Storage는 `storage.rules`를 사용합니다.
 Storage 규칙의 Firestore 조회에 필요한 권한 설정을 Firebase CLI가 요청하면 해당 프로젝트 설정을 확인해 완료합니다.
-Storage를 아직 만들지 않았다면 `--only firestore`로 먼저 배포할 수 있지만, Firebase 모드의 Storage 이미지 업로드는 버킷과 Storage 규칙 설정 후 사용할 수 있습니다.
+Storage를 아직 만들지 않았다면 `--only firestore`로 먼저 배포할 수 있습니다. 다만 이미지 업로드와 반·사용자 삭제는 버킷과 Storage 규칙 설정 후 사용할 수 있습니다. 삭제 과정은 저장 이미지가 없는지까지 확인하므로 잘못된 버킷 설정이나 권한 오류를 건너뛰지 않습니다.
 
 규칙 배포와 웹 앱 배포는 별개입니다. GitHub에 push하는 것만으로 Firebase 규칙이 배포되지는 않습니다.
 
@@ -128,6 +128,7 @@ npm start
 ```bash
 # 환경변수 미설정/부분 설정/완전 설정 및 인증 도메인 검사
 npm run test:distribution
+npm run test:unit
 # 기존 체크리스트와 확인 기록 테스트
 npm run test:checklist
 ```
@@ -136,12 +137,23 @@ Firestore 에뮬레이터 테스트에는 Java 21 이상이 필요합니다.
 
 ```bash
 npm --prefix tests/rules ci
+npm run test:rules
 npm run test:access
 node --test tests/migrateClassAccess.test.mjs
 ```
 
 `test:access`는 로컬의 `demo-rules-test` 프로젝트만 사용합니다. 실제 운영 DB에 접속하지 않습니다.
-전체 기존 테스트 명령 `npm run test:rules`에는 원본에서 누락된 `functions/purgeClass.js`를 참조하는 삭제 테스트가 포함되어 있어 현재 전체 통과를 보장하지 않습니다. 이번 배포본은 이 테스트를 삭제하거나 무력화하지 않습니다.
+`test:rules`는 Firestore와 Storage 에뮬레이터에서 전체 규칙·삭제 테스트를 실행합니다. 반 삭제 테스트는 실제 앱이 사용하는 삭제 함수와 Firestore 클라이언트 어댑터를 검증합니다. 별도 Cloud Functions 배포는 필요하지 않습니다.
+
+## 반 삭제와 사용자 탈퇴 처리
+
+- 반 삭제는 먼저 반을 보관하여 참여자 접근을 막고, 연결된 활동·답변·출석·좌석·모둠·참여 기록과 관리 대상 이미지를 정리한 뒤 반 문서를 삭제합니다.
+- 사용자 탈퇴 처리는 프로필과 연결된 앱 기록을 정리합니다. 기존 로그인 세션의 재접근을 막기 위해 `deletedUsers/{uid}`에 이름·학교가 없는 차단 기록을 남깁니다.
+- 처리 중 오류가 나면 완료로 표시하지 않습니다. 같은 대상에 다시 삭제를 실행하세요. 반 삭제 중 오류가 났다면 보관 목록에서 대상을 찾을 수 있습니다.
+- 삭제 중에는 관리자 다른 탭에서 해당 자료를 편집하지 말고, 완료될 때까지 창을 열어 두세요. 대량 데이터는 시간이 걸릴 수 있습니다.
+- **Firebase Authentication 계정 자체, 별도 백업, 클라우드의 보존 사본, 이미 내려받은 파일은 앱 삭제 범위에 포함되지 않습니다.** 인증 계정은 운영자가 Firebase Console에서 별도로 삭제해야 합니다.
+
+배포 순서와 삭제 범위·복구 확인은 [데이터 삭제 안내](docs/data-deletion.md)를 참고하세요. 기존 배포를 업데이트할 때는 앱 코드와 함께 **Firestore·Storage 규칙도 본인 프로젝트에 배포**해야 합니다.
 
 ## 데이터와 보안 범위
 

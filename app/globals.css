@@ -549,6 +549,8 @@ button.footer-link:hover {
   text-decoration: none;
 }
 .policy-body {
+  word-break: keep-all;
+  overflow-wrap: anywhere;
   width: 100%;
   max-width: 760px;
   margin: 0 auto;

@@ -49,7 +49,7 @@ The repository changes and clipboard operation do not themselves deploy the app,
 ## Verification and Limits
 
 - Run Firestore emulator tests with `npm run test:rules` and the migration unit tests with `node --test tests/migrateClassAccess.test.mjs`.
-- The existing `tests/rules/deleteClass.test.mjs` imports the absent `functions/purgeClass.js`; the complete default suite cannot pass until that separate server module is restored. It is not part of this migration.
+- The deletion tests now exercise the same SDK-neutral orchestration and authenticated client adapter used by the app. `npm run test:rules` starts Firestore and Storage; see [data deletion](data-deletion.md) for its scope and rollout requirements.
 - The live subscription assertion completes, but Firebase leaves test-process handles open in this environment. The verification run uses Node's `--test-force-exit` after completed tests, with `--test-timeout=60000` still enforcing assertion deadlines. This is a test-runner workaround, not a claimed SDK teardown fix.
 - The migration script defaults to read-only. Emulator execution requires an explicit `demo-` project ID.
 - Six-digit codes are bearer enrollment secrets, not strong passwords. Exact lookup prevents directory enumeration but does not provide server-side rate limiting against repeated guesses. For higher-risk use, add an authenticated, rate-limited server redemption endpoint and App Check.

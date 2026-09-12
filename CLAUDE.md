@@ -1,91 +1,58 @@
-# dev-for-teacher — 배포본 프로젝트 컨텍스트
+# dev-for-teacher — 배포본 개발 안내
 
-이 문서의 나머지 내용은 원본의 개발 참고 자료입니다. 현재 설치·인증·배포 절차는 README.md를 기준으로 합니다. 운영 Firebase 설정을 코드에 하드코딩하지 마세요.
+이 저장소는 `imuzikr/dev-for-teachers`에서 분리한 독립 실행용 소스입니다. 설치·배포는 [README.md](README.md)를 기준으로 합니다. 운영 프로젝트의 연결값이나 사용자 데이터를 커밋하지 않습니다.
 
-선생님들이 학교 이름과 이름만 입력해 수업 자료와 활동 아이디어를 정리하는 교실용 연구·활동 웹앱.
-관리자는 별도 로그인으로 권한과 설정을 관리한다.
+## 실행 구조
 
-## 기술 스택
+- Next.js 15 App Router, React 19, Firebase Web SDK를 사용합니다.
+- `lib/firebase.js`의 여섯 환경변수가 모두 비어 있으면 메모리 데모입니다. 일부만 채우면 오류를 표시합니다.
+- 실제 운영은 운영자 자신의 Firebase Authentication·Firestore·Storage와 보안 규칙을 사용합니다.
+- 최초 Google 관리자 로그인 계정 1명이 `system/admin`에 등록됩니다. 일반 참여자는 이름·학교를 입력한 익명 세션으로 반 코드를 입력합니다.
+- 개발용 역할 전환과 메모리 데모는 Firebase 보안 규칙의 권한을 부여하지 않습니다.
 
-- **프레임워크**: Next.js 15.5 App Router, React 19 (Client Components)
-- **DB**: Firebase Firestore (실서비스) / 브라우저 인메모리 Mock (데모 모드)
-- **스타일**: 단일 CSS 파일 `app/globals.css` (CSS Variables + Flexbox)
-- **배포**: Vercel
+## 현재 경로
 
-## 실행
+| 경로 | 역할 |
+| --- | --- |
+| `/` | 참여자 입장과 관리자 Google 로그인 |
+| `/books` | 프로젝트·활동·자료·마인드맵과 반 운영 |
+| `/admin` | 관리자 전용 사용자 목록·활동 확인·탈퇴 처리 |
+| `/privacy`, `/terms` | 운영자가 수정해야 하는 안내 문서 |
+| `/board`, `/report` | 폐지된 경로: 404 반환 |
+
+`/study` 화면은 없습니다. 예전 공부방 데이터 접근 함수 일부는 삭제·호환 처리에 남아 있으므로 함수별 참조를 확인한 뒤 수정하세요.
+
+## 주요 파일
+
+- `lib/auth.js`, `lib/user.js`: 로그인·프로필·역할 판정
+- `lib/store.js`: 화면에서 사용하는 Firestore/데모 CRUD와 구독
+- `lib/bookProjectStorage.js`: 프로젝트 이미지 저장
+- `components/BasicFormatEditor.jsx`, `RichTextDisplay.jsx`: 현재 서식 입력·출력
+- `components/MindmapCanvas.jsx`: 현재 마인드맵
+- `components/BookClassroomTools.jsx`: 반 관리·수업 준비 연결
+- `firestore.rules`, `storage.rules`: 서버에서 강제하는 접근 권한
+- `DESIGN.md`, `app/globals.css`, `app/book-sidebar.css`: 기존 디자인 계약과 스타일
+
+## 변경·검증 원칙
+
+- 데이터 변경은 Firebase와 데모 양쪽을 확인합니다. 삭제는 실패를 숨기지 않고 재시도할 수 있게 유지합니다.
+- 반 삭제 시 반에 속한 기록과 저장 이미지를 정리하되 다른 반과 공용 수업 자료를 보존합니다.
+- 사용자의 Firebase Authentication 계정 자체는 브라우저에서 다른 사용자 대신 삭제할 수 없습니다. 앱 데이터 정리와 인증 계정 삭제를 구분합니다.
+- 구독 콜백의 오류를 빈 목록으로 처리하는 기존 코드를 새 삭제 코드에 복사하지 않습니다.
+- 테스트 데이터를 운영 프로젝트에 심지 않습니다. 에뮬레이터의 `demo-*` 프로젝트만 사용합니다.
+- 규칙을 바꾸면 Firestore·Storage 테스트를 실행하고, README의 명령으로 운영자가 자신의 프로젝트에 규칙을 별도로 배포합니다.
+- 의존성·도구 설치는 이 저장소의 기존 계약을 따릅니다. 사용하지 않는 화면을 되살리기 위해 패키지를 추가하지 않습니다.
+- pdf.js 본체와 복사하는 worker는 모두 `legacy` 빌드를 사용합니다. `scripts/copy-pdf-worker.mjs`가 predev/prebuild에서 같은 출처의 worker를 준비합니다.
 
 ```bash
-npm run dev        # 개발 서버 (http://localhost:3000)
-npm run build      # 프로덕션 빌드
-npm run test:rules # Firestore 보안 규칙 테스트 (에뮬레이터, Java 필요)
+npm ci
+npm run test:distribution
+npm run test:unit
+npm run test:checklist
+npm --prefix tests/rules ci
+npm run test:rules
+npm --prefix tests/rules run test:storage
+npm run build
 ```
 
-규칙 테스트는 `tests/rules/`에 있고 최초 1회 `cd tests/rules && npm install`이
-필요합니다. 루트와 분리한 이유·작성 시 주의점은 `tests/rules/README.md` 참고.
-**`firestore.rules`를 고치면 반드시 이 테스트를 돌리고 배포하세요.**
-
-Firebase 미설정 시 자동으로 **데모 모드**로 동작 (새로고침 시 데이터 초기화).
-실서비스 전환: `.env.example`을 `.env.local`로 복사하고 본인의 Firebase 웹 설정 여섯 항목을 입력합니다. 배포 시 환경변수에 등록하고 다시 빌드합니다.
-
-## 주요 페이지
-
-| 경로 | 설명 |
-|------|------|
-| `/` | 랜딩 — 일반 선생님 시작 + 관리자 로그인 |
-| `/study` | 공부방 (Trello형 보드 + KWL 패널) |
-| `/books` | 책방 활동 |
-| `/board` | 제거됨 — 404 |
-| `/admin` | 제거됨 — 404 |
-| `/report` | 제거됨 — 404 |
-
-## 핵심 파일
-
-| 파일 | 역할 |
-|------|------|
-| `lib/store.js` | Firestore CRUD + Mock Store + 구독(subscribe) 함수 전체 |
-| `lib/user.js` | `getCurrentUser()`, 일반 선생님 세션, `isAdmin()` — 세션 기반 사용자 |
-| `lib/firebase.js` | Firebase 초기화. `isFirebaseConfigured` 플래그로 모드 분기 |
-| `app/globals.css` | 전체 스타일. 모바일 반응형은 파일 하단 `@media (max-width: 768px)` |
-| `components/RichTextEditor.jsx` | 서식 입력 에디터 (variant: full/chat) |
-| `components/KwlPanel.jsx` | KWL 사이드 패널 (오늘 탭 + 기록 탭) |
-
-## 모바일 레이아웃 핵심 패턴
-
-### 공부방
-- 수평 스냅 스크롤: `scroll-snap-type: x mandatory`
-- KWL 모바일: FAB 버튼(`kwl-fab`) → `kwl-panel--open` 클래스로 오버레이 패널
-
-## 역할 구분
-
-- **일반 선생님(isTeacher + anonymous guest)**: 학교명/이름 기반 익명 세션으로 공부방과 책방 기능 이용
-- **교사(isTeacher)**: 전체 학생 카드 열람, 보드 설정, 정렬, 반 관리
-- **학생**: 보드당 카드 1개 작성, KWL 작성
-- **관리자(isAdmin)**: 역할 관리와 교사 승인
-
-역할 전환 (개발용): `RoleSwitcher` 컴포넌트 (`role-switch` CSS 클래스, 모바일에서 숨김)
-
-## 데이터 모델 (Firestore 컬렉션)
-
-- `studyBoards` — 공부방 보드 (classId, type, viewMode, editMode, keywords[])
-- `studyBoards/{boardId}/cards` — 공부방 카드 **서브컬렉션** (boardId, authorId, authorName, authorEmoji)
-  - 문서 ID = 작성자 uid → 보드당 카드 1개 보장. 전체 조회는 `collectionGroup("cards")` 사용
-  - (데모 모드 mock은 평면 배열 `mock.studyCards`로 흉내 — Firebase는 서브컬렉션)
-- `kwl` — KWL 기록 (classId, userId, date, K, W, L) — append 모델 (저장마다 새 문서)
-- `users` — 사용자 프로필 (uid, schoolName, realName, role, requestedRole)
-  - **프로필 정보(학교 이름·성명)는 여기에만** 저장. 게시물·카드엔 세션 또는 게시물 표시용 익명 이름과 아이콘만 넣음.
-  - 읽기 규칙: 본인+교사. 교사 화면은 `subscribeUserDirectory`로 uid→학교 이름/성명 조회.
-
-## 주의 사항
-
-- `store.js`의 Mock 구현과 Firebase 구현을 **항상 동기화**할 것
-  (함수 추가 시 두 분기 모두 작성)
-- `saveKwl` (upsert)은 제거됨 — `addKwl` (append)만 사용
-- `subscribeMyKwl` (단일 반환)은 제거됨 — `subscribeMyTodayKwl` (배열 반환)만 사용
-- CSS `@media (max-width: 760px)` 블록이 별도 존재함 — 768px 블록에서 필요 시 덮어쓸 것
-- 채팅 입력: Enter 단독은 줄바꿈, **Ctrl/⌘+Enter는 전송** (전송 버튼도 유지)
-- **pdf.js는 반드시 `legacy` 빌드**를 쓸 것 (`pdfjs-dist/legacy/build/…`).
-  기본 빌드는 `Map.prototype.getOrInsertComputed` 등 최신 문법을 써서
-  Chromium 141에서도 `render()`가 실패함(실측). `lib/pdfSlides.js`의 import와
-  `scripts/copy-pdf-worker.mjs`가 복사하는 워커는 **항상 같은 빌드로** 맞출 것
-- pdf.js 워커는 CSP(`worker-src 'self'`) 때문에 CDN 불가 — `public/`에 복사해
-  같은 출처에서 서빙 (prebuild·predev에서 자동 실행, 생성물이라 git 제외)
+테스트별 범위와 실행 조건은 [tests/rules/README.md](tests/rules/README.md), 운영 데이터 이전은 [docs/class-access-security.md](docs/class-access-security.md)를 참고하세요.
