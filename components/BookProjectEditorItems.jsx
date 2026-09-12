@@ -1,0 +1,139 @@
+"use client";
+
+import { useState } from "react";
+import { orderedStepItems } from "./BookProjectPreview";
+import BasicFormatEditor from "./BasicFormatEditor";
+import ActivityTemplateSetting from "./ActivityTemplateSetting";
+import BookItemImageEditor from "./BookItemImageEditor";
+import { IconChevronDown, IconChevronUp, IconTrash } from "./StatusIcons";
+
+function itemKey(kind, id) {
+  return `${kind}:${id}`;
+}
+
+export default function BookProjectEditorItems({ step, onChange, onRemove, onMove, onAdd, onImageBusyChange, disabled = false }) {
+  const [draggingKey, setDraggingKey] = useState(null);
+  const items = orderedStepItems(step);
+
+  if (items.length === 0) {
+    return <p className="book-step-empty">등록된 활동과 자료가 없습니다.</p>;
+  }
+
+  return (
+    <section className="book-step-items book-step-items--mixed">
+      <div className="book-step-items-head">
+        <strong>활동과 자료</strong>
+        <small>드래그해서 순서 변경</small>
+      </div>
+      {items.map((entry, index) => {
+        const resource = entry.kind === "resource";
+        const key = itemKey(entry.kind, entry.id);
+        const label = resource ? "자료" : "활동";
+        const source = entry.source;
+        const previousKey = index > 0 ? itemKey(items[index - 1].kind, items[index - 1].id) : "";
+        const nextKey = index < items.length - 1 ? itemKey(items[index + 1].kind, items[index + 1].id) : "";
+        return (
+          <article
+            className={`book-step-item-edit book-step-item-edit--${entry.kind}${draggingKey === key ? " is-dragging" : ""}`}
+            key={key}
+            onDragOver={(event) => event.preventDefault()}
+            onDrop={(event) => {
+              event.preventDefault();
+              const fromKey = event.dataTransfer.getData("text/plain");
+              if (fromKey) onMove(fromKey, key);
+            }}
+          >
+            <header>
+              <span className="book-step-drag-handle-wrap">
+                <span
+                  className="book-step-drag-handle"
+                  role="button"
+                  tabIndex={0}
+                  aria-label={`${label} ${index + 1} 순서 이동`}
+                  draggable
+                  onDragStart={(event) => {
+                    event.dataTransfer.setData("text/plain", key);
+                    event.dataTransfer.effectAllowed = "move";
+                    setDraggingKey(key);
+                  }}
+                  onDragEnd={() => setDraggingKey(null)}
+                />
+                {label} {index + 1}
+                {!resource && (
+                  <label className="book-step-answer-check" title="학생 답변 받기">
+                    <input
+                      type="checkbox"
+                      checked={source.requiresAnswer !== false}
+                      onChange={(event) => onChange(entry.kind, source.id, { requiresAnswer: event.target.checked })}
+                      aria-label={`${label} ${index + 1} 학생 답변 받기`}
+                    />
+                    <span>답변</span>
+                  </label>
+                )}
+              </span>
+              <input
+                value={source.title}
+                onChange={(event) => {
+                  const title = event.target.value;
+                  onChange(entry.kind, source.id, { title });
+                }}
+                placeholder={resource ? "자료 제목" : "활동 제목"}
+                aria-label={`${label} ${index + 1} 제목`}
+              />
+              <div className="book-step-order-actions" aria-label={`${label} ${index + 1} 순서 변경`}>
+                <button
+                  type="button"
+                  className="book-step-order-btn"
+                  title="위로 이동"
+                  aria-label={`${label} ${index + 1} 위로 이동`}
+                  disabled={!previousKey}
+                  onClick={() => previousKey && onMove(key, previousKey)}
+                >
+                  <IconChevronUp size={14} />
+                </button>
+                <button
+                  type="button"
+                  className="book-step-order-btn"
+                  title="아래로 이동"
+                  aria-label={`${label} ${index + 1} 아래로 이동`}
+                  disabled={!nextKey}
+                  onClick={() => nextKey && onMove(key, nextKey)}
+                >
+                  <IconChevronDown size={14} />
+                </button>
+              </div>
+              <button type="button" className="btn-ghost role-danger-btn" title={`${label} 삭제`} aria-label={`${label} ${index + 1} 삭제`} onClick={() => onRemove(entry.kind, source.id)}><IconTrash size={13} /></button>
+            </header>
+            <div className="book-step-item-fields">
+              {!resource && <ActivityTemplateSetting enabled={source.templateEnabled === true} content={source.content} onChange={(templateEnabled) => onChange(entry.kind, source.id, { templateEnabled })} />}
+              <BasicFormatEditor
+                templateEnabled={!resource && source.templateEnabled === true}
+                value={source.content || ""}
+                onChange={(content) => onChange(entry.kind, source.id, { content })}
+                placeholder={resource ? "" : "활동 안내사항"}
+                ariaLabel={`${label} ${index + 1} ${resource ? "내용" : "안내사항"}`}
+              />
+              <BookItemImageEditor disabled={disabled} onBusyChange={(busy) => onImageBusyChange?.(key, busy)} images={source.images || []} imageSizes={source.imageSizes} onChange={(images, imageSizes) => onChange(entry.kind, source.id, { images, imageSizes })} />
+              <div className={onAdd && index === items.length - 1 ? "book-step-add-actions book-step-item-action-row" : "book-step-item-url-row"}>
+                {onAdd && index === items.length - 1 && <>
+                  <button type="button" className="btn-ghost" disabled={disabled} onClick={() => onAdd("activity")}>+ 활동 추가</button>
+                  <button type="button" className="btn-ghost" disabled={disabled} onClick={() => onAdd("resource")}>+ 자료 추가</button>
+                </>}
+                <input
+                  value={resource ? source.url || "" : source.bookUrl || source.url || ""}
+                  onChange={(event) => {
+                    const url = event.target.value;
+                    onChange(entry.kind, source.id, resource ? { url } : { url, bookUrl: url });
+                  }}
+                  placeholder={resource ? "자료 링크 URL" : "활동 링크 URL"}
+                  aria-label={`${label} ${index + 1} 링크 URL`}
+                  type="url"
+                />
+              </div>
+            </div>
+          </article>
+        );
+      })}
+    </section>
+  );
+}

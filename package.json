@@ -1,0 +1,26 @@
+{
+  "name": "dev-for-teacher",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "predev": "node scripts/copy-pdf-worker.mjs",
+    "dev": "next dev",
+    "prebuild": "node scripts/copy-pdf-worker.mjs",
+    "build": "next build",
+    "start": "next start",
+    "test:rules": "npm --prefix tests/rules test",
+    "test:checklist": "node --experimental-vm-modules --test tests/activityChecklist.test.mjs tests/bookConfirmations.test.mjs",
+    "test:distribution": "node --experimental-vm-modules --test tests/distributionConfig.test.mjs",
+    "test:access": "npm --prefix tests/rules run test:access"
+  },
+  "dependencies": {
+    "firebase": "^11.9.0",
+    "next": "^15.3.3",
+    "pdfjs-dist": "^6.2.108",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
+  },
+  "overrides": {
+    "postcss": "^8.5.10"
+  }
+}

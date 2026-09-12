@@ -1,0 +1,156 @@
+# 교사 개발자 Design Contract
+
+- 학생의 체크리스트가 있는 활동·자료에는 확인/저장 버튼 바로 위에 `모두 체크하기`와 `모두 체크 해제하기` 알약 버튼을 8px 간격의 동일 너비 2열로 배치해 행 전체를 채운다. 기존 보조 버튼 토큰, 12px 글자, 32px 높이를 사용하며 터치 환경에서는 44px 높이를 확보한다. 학생 패널과 확대 모달은 내용·답변 입력 → 체크 버튼 및 확인/저장 → 첨부 이미지 순서다. 교사 이미지 발표 배치는 유지한다. 전체 선택·해제는 미확인 상태로 자동 저장하되, 완료 전송은 별도의 확인/저장 명령에만 맡긴다. 잠김·교사 화면에는 숨기며 로딩·저장 처리 중에는 두 버튼을 비활성화한다. 이미 전체 선택 상태에서는 선택 버튼만 비활성화한다.
+
+- 전체 진행률의 완료 인원 표시는 수강생이 1명 이상이고 해당 활동·자료를 모두 확인했을 때만 `⭐ 8/8`처럼 별 이모지를 앞에 붙인다. 기존 글자 크기와 행 배치를 유지하며 미완료·참여자 없음에는 별을 표시하지 않는다.
+
+- 도움 글의 3선 표시 오른쪽에는 기존 선형 확대 아이콘과 44px 높이의 독립 버튼을 배치한다. 본문과 제목별 항목은 기존 도움 글 모달에서 전체 높이로 읽고 닫기, Escape, 배경 클릭, 포커스 복귀를 유지한다.
+- 도움 글 상위에는 제목과 URL만 둔다. 모든 본문은 들여쓴 하위 항목으로 표시하며 각 항목은 제목, 서식 본문, 링크와 개별 편집·저장·삭제 기능을 가진다. 이전 상위 본문은 첫 번째 ‘기존 내용’ 항목으로 보존하고, 항목 변경 시 원본과 함께 원자적으로 저장한다. 새 도움 글의 항목은 상위 저장 시 함께 저장한다.
+- 767px 이하 책방 화면은 콘텐츠에 맞춰 전체 페이지 높이가 늘어나고 문서 자체를 세로 스크롤할 수 있다. 기존 패널의 가로 접근은 유지하며 768px 이상에서는 기존 고정 높이와 내부 스크롤을 유지한다. 모달을 열 때의 문서 스크롤 잠금은 변경하지 않는다.
+
+## 1. Direction
+
+교사 개발자는 밝은 흰 배경 위에 3D 교육 일러스트, 부드러운 유리 질감, 포레스트 그린 CTA와 세이지 톤 표면을 얹는 친근한 교사 협업 도구다. 첫 화면은 선생님들이 연구하고 대화하는 장면을 크게 보여 주고, 중앙에는 짧은 브랜드 메시지만 남겨 앱의 시작점이 바로 보이게 한다.
+
+## 2. Tokens
+
+- Brand name: `교사 개발자`
+- Background image: `/teacher-collaboration-hero.png`
+- Palette: forest `#2f6f3e`, deep forest `#24552f`, sage `#e6f1ea`, sage card `#f4faf3`, warm paper `#fbfaf3`, lime accent `#cde85b`
+- Surface glass: `rgba(246, 249, 241, 0.2)` with blur and soft green shadow
+- Surface glass token: `--landing-glass-bg`, `--landing-glass-border`, `--landing-shadow`
+- Control tokens: `--landing-control-bg`, `--landing-control-border`, `--landing-outline-bg`, `--landing-outline-border`
+- Error tokens: `--landing-error-bg`, `--landing-error-border`, `--auth-error-bg`, `--auth-error-border`
+- Layout tokens: `--landing-top-gap`, `--landing-form-gap`, `--landing-control-height`, `--landing-header-height`, `--landing-hero-card-padding`, `--landing-hero-radius`
+- Primary action: existing `var(--primary)` / `var(--primary-dark)` / `var(--primary-light)` mapped to forest green, deep forest, and pale sage
+- Resource item accent: `--resource-light`, `--resource-border`, `--resource-ink` use a muted warm amber ramp so 자료 rows can be distinguished from 활동 rows without leaving the paper/sage system.
+- Text: existing `var(--dark)`, `var(--text)`, `var(--text-sub)`
+- Radius: `var(--radius-btn)` for controls, `28px` for the hero glass panel
+- Spacing unit: existing 4px-based app spacing; landing controls use compact 8-12px gaps
+
+## 3. Typography
+
+- Logo and hero title use the existing serif display face.
+- Buttons and form controls use the existing UI sans stack.
+- Korean text must avoid cramped containers that force single-syllable orphan lines.
+- 활동·자료 상세 카드 헤더는 첫 줄에 28px 순서 배지, 11px 종류·확인 상태와 28px 아이콘 명령을 압축하고, 제목은 별도 아랫줄 전체 폭에서 14px/1.45 크기로 말줄임 없이 줄바꿈한다. 행·명령 간격은 4px/8px이며 터치 포인터에서는 아이콘 명령을 44px 조작 영역으로 확장한다. 제목은 최소 두 줄 높이를 확보한다.
+
+## 4. Components
+
+- `question-signal-note`: 학생이 아직 손들지 않은 상태에서 손바닥 버튼을 누르면 폭 420px 이하의 작은 메모 모달을 연다. 선택 입력 메모는 1,000자까지 받으며 `메모 없이 보내기`와 `메모와 함께 보내기`를 제공한다. 공백만 있으면 메모 전송을 비활성화한다. 두 명령은 좁은 화면에서도 한 줄 문구를 유지하도록 세로 배치한다. 전송 성공 후 닫고 실패 시 입력을 보존한다. 기존 손들기 취소를 유지한다. 교사의 손바닥 목록에는 학생별 메모 전체를 줄바꿈을 보존해 보여 주고, 확인 시 해당 신호를 처리하고 목록을 닫는다. 모달은 카드 배경·기존 입력 테두리·주요/보조 CTA 토큰, 12px 간격, 44px 이상 버튼, Escape·배경 닫기·포커스 순환을 사용한다.
+
+- `landing-top`: white app bar with logo on the left and compact entry controls on the right; it stays in normal document flow above the illustration and never overlays it.
+- `landing`: desktop hero preserves the source illustration ratio so the top of the artwork begins directly below the app bar without cropping.
+- `landing-quick-start`: school/name inputs, start button, and admin login button in one responsive row.
+- `hero-glass`: centered compact translucent panel containing only the brand title and tagline.
+- `modal-auth`: Google-only sign-in dialog; the first successful Google login claims administration.
+- `admin-layout`: 관리자 전용 2열 작업 화면. 왼쪽에는 검색 가능한 사용자 디렉터리와 탈퇴 명령을 유지하고, 오른쪽에는 선택 사용자의 52주 활동 히트맵만 표시한다.
+- `heatmap-panel`: 5단계 세이지-포레스트 활동 밀도와 미래 날짜 중립 상태를 사용하는 가로 스크롤 가능 잔디 히트맵.
+- `book-workspace`: 교사 책방 홈 전체를 브라우저 높이의 좌우 분할 화면으로 구성한다. 왼쪽 고정 폭 활동·자료 카드 패널은 화면 왼쪽 끝부터 전체 높이를 사용하고, 오른쪽 유동 폭 본문 안에 상단 내비게이션·책방 제목·프로젝트 흐름·개인 카드 대시보드를 쌓는다. 교사용 화면은 수업 준비와 반 관리 명령 아래의 독립된 Step 버튼 줄로 관리 범위를 고르며, 버튼은 프로젝트에 등록된 모든 Step을 고정 개수 제한 없이 렌더링한다. 선택된 Step 버튼은 진한 포레스트 배경으로 현재 상태를 표시한다. 왼쪽 관리 패널은 오른쪽 Step 선택과 독립적으로 등록된 모든 Step을 보여 주고 각 Step을 자체적으로 펼치고 접을 수 있어야 하며, 오른쪽 프로젝트 구성 상세는 선택된 Step 하나만 표시하되 중복되는 설명 문구, `전체 프로젝트 구성`, 반 이름, Step 제목 헤더는 본문에서 반복하지 않는다. 왼쪽 패널이 접힌 상태에서는 본문 시작 여백을 넓혀 콘텐츠가 세로 레일에 붙어 보이지 않게 한다. 학생 확인 진척도는 개인 카드와 개인 카드 섹션 헤더 안에서 확인하며 별도 오른쪽 진척도 서랍은 사용하지 않는다. 학생 책방 홈에서는 교사용 왼쪽 패널을 제거해 본문을 전체 폭으로 사용한다. 사용자 프로필이 개인 카드의 단일 출처이며 별도 카드 문서를 중복 생성하지 않는다.
+- `book-library-side`: 참고 앱의 사이드바처럼 현재 작업 맥락을 압축해 보여 주는 책방 내비게이션 패널이다. 접기/펼치기 명령은 패널 오른쪽 상단의 작은 원형 아이콘 버튼으로 제공하고, 버튼 전용 상단 여백을 확보해 좁은 화면에서도 잘리지 않아야 한다. 열린 상태에서는 왼쪽으로 접히는 `«`, 접힌 상태에서는 다시 오른쪽으로 펼치는 `»` 방향을 표시한다. 접힌 상태에서는 48px 세이지 레일 상단에 아이콘만 남긴다. 펼친 상태에서는 프로젝트 전체 Step·활동·자료·참여자 수 요약과 Step 아코디언 흐름을 제공하며, 별도의 빠른 이동 목록과 별도의 Step 상세 목록을 이원화하지 않는다. 교사용 왼쪽 Step 아코디언의 열린 상태는 오른쪽 메인 화면의 Step 버튼 선택과 독립적으로 동작하고, 메인 화면에서 어떤 Step을 선택해도 왼쪽 패널은 모든 Step을 자체적으로 펼치고 접을 수 있어야 한다. 패널을 열 때 내용은 opacity와 transform으로 부드럽게 드러나야 하며 갑자기 아래로 떨어져 보이면 안 된다.
+- `book-help-drawer`: 개발자실 오른쪽에 고정되는 도움 글 서랍이다. 교사와 학생 모두 볼 수 있으며, 접힌 상태에서는 52px 오른쪽 레일과 `도움 글` 세로 라벨만 남긴다. 펼친 상태에서는 도움 글 목록 버튼이 세로로 쌓이고, 학생이 각 버튼을 누르면 제목·내용·URL로 구성된 큰 읽기 전용 모달이 열리고, 교사는 같은 자리에서 상세 내용을 펼쳐 편집한다. 학생은 조회와 링크 열기만 가능하고, 교사는 도움 글 추가·편집·삭제를 같은 패널 안에서 수행한다. 교사용 분할 화면에서는 도움 글 서랍이 상단과 본문을 같은 그리드 흐름으로 밀어내야 하며 상단 영역을 덮는 독립 레이어처럼 보이면 안 된다. 도움 글의 내용 입력은 굵게, 글머리 기호, 숫자 글머리 기호, 작게·보통·크게 3단계 텍스트 크기를 제공하는 기본 서식 에디터를 사용하고, 저장된 서식은 학생 조회 화면에도 동일하게 표시한다.
+- `class-join-panel`: 학생은 항상 안내받은 숫자 6자리 코드를 직접 입력해 참여한다. 자동 가입이나 가입 가능한 반의 수에 따른 안내는 제공하지 않는다. 제목은 좁은 화면에서도 한글 단어 중간을 나누지 않는다. 기존 선택 복원은 현재 공개된 운영 중(accessVersion 2) 반의 유효한 멤버십에 한정하며, 보관 시 선택과 표시 중인 프로젝트·활동을 즉시 제외한다. 동일 UID·역할의 기존 클래스 멤버십 리스너는 다른 클래스 추가·보관에도 유지해 작성 중 내용을 보존하며, 해당 멤버십 삭제·오류 또는 UID·역할 변경 시 접근을 해제한다.
+- `class-manager-join-controls`: 기존 isTeacher 운영자 계약을 유지하며 엄격한 관리자 역할만 관리 모달과 가입 허용/차단, 참여 코드 조회·입력·저장·생성·복사·전체보기를 사용할 수 있다. 기존 이름 수정·보관·삭제·보관 목록 보기·복원은 유지한다. 클래스 구독은 사용자 UID/역할을 전달하며 비관리자에게는 운영 중 메타데이터만 제공한다. 참여 코드는 관리자 전용 비공개 구독으로만 전달하고 학생 멤버십 조회는 현재 보이는 운영 중 클래스 ID로 제한한다.
+- `book-project-builder`: 책방 상단의 프로젝트 만들기 명령으로 열리는 왼쪽 패널 편집기. 저장 명령과 프로젝트 이름은 패널 최상단에 두고, Step 편집은 별도 바로가기 목록과 별도 카드 목록으로 나누지 않는다. 각 Step 항목을 누르면 같은 위치에서 제목·활동·자료 입력이 아코디언으로 펼쳐지고 다시 접힌다. Step 추가 명령은 항상 마지막 Step 아래에 놓는다.
+- `book-project-step`: 활동과 자료를 같은 Step 안의 하나의 배치 흐름으로 담는 아코디언 카드. 저장된 Step 헤더에는 해당 Step을 바로 여는 작은 확대 명령을 둔다. 확대 명령은 화면 중앙의 큰 Step 편집 모달을 열어 Step 제목, 활동·자료 순서, 내용, URL, 학생 답변 여부, 활동·자료 추가를 넓은 화면에서 처리하게 한다. 펼친 Step에서는 활동은 제목 자체를 내용으로 표시하고, 자료는 제목과 본문을 표시한다. 편집 중인 Step 제목은 아코디언 헤더에서 바로 수정하고 같은 헤더에서 Step을 삭제할 수 있다. 본문 하단에는 활동 추가와 자료 추가 명령을 나란히 두되, 버튼을 누르면 패널 안에 빈 카드를 만들지 않고 큰 작성 모달에서 제목·내용·URL을 입력한 뒤 추가한다. 각 활동·자료 박스는 제목을 수정하는 헤더와 별도 내용·URL 입력 영역을 사용하며, 활동 박스의 학생 답변 필요 여부는 `활동 1`, `활동 2` 같은 순서 라벨 오른쪽의 작은 체크박스로만 제어한다. 답변 필요가 꺼진 활동은 학생/교사 카드에서 답변 입력 또는 답변 표시 영역을 만들지 않고, 고정 높이의 빈 답변 자리도 남기지 않는 컴팩트 카드로 확인만 수행한다. 내용 입력은 굵게, 글머리 기호, 숫자 글머리 기호, 작게·보통·크게 3단계 텍스트 크기를 제공하는 기본 서식 에디터를 사용하며, 텍스트 크기 버튼은 선택 영역이 아니라 해당 입력 영역의 전체 텍스트에 즉시 적용한다. 활동과 자료는 Step 내부에서 드래그 앤 드롭으로 순서를 바꿀 수 있어야 한다.
+- `book-step-preview-modal`: 한 Step의 활동과 자료를 저장 순서대로 묶어 전체 내용을 읽는 모달. 이전·다음 명령은 같은 Step 안에서 순환하며, 활동 실행과 자료 링크 명령은 항목 종류에 맞게 제공한다.
+- `book-project-item-actions`: 저장된 활동·자료의 크게 편집·수정·삭제 명령은 항목 카드 오른쪽 위의 작은 아이콘 버튼으로 정렬하고, 활동과 자료 잠금은 별도 자물쇠 아이콘 버튼 하나로 제어한다. 별도 `활동 열기` 아이콘은 두지 않는다. 제목은 그 아래 한 줄로 말줄임 처리해 버튼 때문에 중간 줄바꿈되지 않게 한다. 크게 편집은 패널 안 확장이 아니라 화면 중앙의 넓은 모달을 열어 제목·내용·URL을 수정하고, 활동은 학생 답변 필요 여부까지 함께 편집한다. 큰 편집 모달 상단은 2열 구조로 두어 왼쪽에는 제목·URL·학생 답변 설정 같은 짧은 입력을 모으고, 오른쪽에는 내보내기 기능을 배치한다. 내보내기 기능은 이 큰 모달 안에서만 제공하며, 현재 항목·현재 Step·전체 Step 범위를 고르고 목적 클래스를 선택해 복사한다. 현재 항목 내보내기는 목적 Step의 가장 아래에 추가하고, 목적 클래스에 Step이 없으면 새 Step을 만든 뒤 그 안에 넣는다. 현재 Step 또는 전체 Step 내보내기는 목적 클래스의 가장 아래 Step으로 복사본을 추가한다. 왼쪽 사이드 패널의 자료는 활동처럼 컴팩트한 목록 행으로만 보이며 본문 미리보기는 펼치지 않는다. 자료 링크가 있으면 목록 행 안에 짧은 출처 요약 링크를 표시해 새 탭으로 이동할 수 있게 하고, 자료 행은 따뜻한 앰버 톤으로 활동 행과 구분한다. 자료 복사 명령도 같은 오른쪽 위 아이콘 묶음에 두며 본문과 URL을 함께 클립보드에 담는다. 삭제는 확인 절차를 거친다.
+- `book-project-flow-overview`: 개인 카드 목록 위에서 선택된 Step의 프로젝트 구성을 보여 주는 상세 밴드. 교사용 Step 버튼을 누르면 해당 Step 하나의 활동·자료가 개인 상세 화면과 같은 큰 가로 카드 행으로 교체되어 나타나며, 선택 상태에서는 별도 제목·반 이름·Step 헤더를 반복하지 않는다. 프로젝트 편집 중에는 저장 전 draft Step도 같은 본문 미리보기에 즉시 반영한다. 비어 있거나 활동 문서 동기화가 아직 끝나지 않은 Step도 전체 흐름에서는 숨기지 않는다. 잠긴 활동은 카드 안에 작은 잠김 상태를 함께 표시하고, 자료는 잠금 대상이 아니므로 잠금 토글을 표시하지 않는다.
+- `book-presentation-modal`: 교사용 Step 관리 카드의 `발표 모드` 명령으로 여는 큰 중앙 모달이다. 활동 카드는 하단 버튼을 2열로 나누어 왼쪽에 열기·잠그기, 오른쪽에 발표 모드를 두고, 자료 카드는 발표 모드만 제공한다. 모달은 현재 활동·자료의 텍스트부터 첨부 이미지 순서로 이전·다음 이동하며, 다른 항목으로 넘어가거나 끝에서 순환하지 않는다. 교사가 선택하거나 넘긴 화면은 기존 방송 채널을 통해 학생 화면에 동기화된다. 발표 내용은 테두리가 강조된 고정 사각 박스로 보이지 않게 하고, 따뜻한 배경 위에 충분한 안쪽 여백과 세이지 강조선, 제한된 문장 폭을 가진 읽기 표면으로 보여 준다. 항목을 전환할 때는 본문 스크롤을 맨 위로 되돌려 제목 아래 내용이 잘려 보이지 않아야 한다. 교사용 모달의 종료 명령은 하단 오른쪽의 전용 `발표 종료` 버튼으로 표시하고, 작은 종료 마크와 따뜻한 경고 톤을 사용해 이전·다음 이동과 시각적으로 구분한다. 학생 화면의 방송 오버레이는 보기 전용이며 교사가 닫거나 다른 항목으로 넘기면 자동으로 따라간다.
+- `book-step-switcher`: Step 버튼 묶음이다. 등록된 모든 Step을 버튼으로 표시하며 많은 Step이 있어도 줄바꿈으로 모두 접근 가능해야 한다. 교사용 화면에서는 수업 준비·반 관리 명령 아래의 독립 줄에서 선택한 Step의 관리 패널과 프로젝트 구성 상세를 표시하고, 학생용 화면에서는 반 이름 오른쪽 버튼을 누르면 개인 카드 목록 자리에서 해당 Step의 상세 활동·자료 카드 화면으로 진입한다.
+- `book-class-purpose-toggle`: 교사용 상단 내비게이션의 개발자실 위치는 `연수용`과 `교내용`을 토글하는 현재 모드 버튼으로 사용한다. 연수용은 서로 다른 반 단위 목록을, 교내용은 같은 참여자가 이어지는 차시 단위 목록을 보여 준다. 교내용 차시를 새로 만들면 같은 선생님이 만든 기존 교내용 차시의 참여자가 새 차시에도 이어진다.
+- `book-student-step-card`: 학생이 처음 개발자실에 들어왔을 때 `STEP 카드` 섹션에 표시되는 Step 선택 카드다. 각 카드는 Step 번호, 제목, 활동·자료 개수, 해당 Step의 본인 확인 조각 바를 보여 주며, 클릭하면 기존 개인 상세 카드 기능을 해당 Step만 필터링한 화면으로 연다.
+- `profile-modal`: 사용자 프로필 수집 항목은 학교 이름과 성명 두 가지로 제한한다. 내 프로필과 교사용 사용자 수정 화면 모두 학번, 이메일, 닉네임, 아바타 수정 UI를 두지 않으며, 기존 legacy 필드는 저장 시 제거한다. 게시물 표시용 익명 이름과 아이콘은 사용자 프로필 문서가 아니라 세션 또는 게시물 표시 데이터로만 다룬다.
+- `book-personal-card`: 학교명, 이름, 활동 진행률을 표시한다. 교사는 모든 참여자 카드를 열어 개별 진행 상황을 확인할 수 있고, 일반 사용자는 자신의 카드 목록 대신 Step 카드를 통해 상세 화면에 들어간다. 개인 카드 섹션 헤더에는 교사용 화면에서만 학급 평균 확인 상태바를 표시하고, 학생용 화면에서는 자신의 카드 내부 진행 상태만 표시한다. 상태바는 `개인 카드` 제목 오른쪽에서 프로젝트에 등록된 모든 Step 그룹을 균등 분배하지 않고 실제 흐름처럼 연속 배치하며, 각 Step 그룹 안에는 최대 7개의 활동·자료 조각 중 실제 생성된 항목 수만 표시한다. 항목이 없는 Step도 생성된 Step이면 비어 있는 점선 조각으로 존재를 표시한다. 개인 카드 내부 조각 바도 같은 Step 그룹 기준을 사용해 새 Step이 만들어지면 자동으로 해당 Step 그룹을 추가한다. 카드 내부 조각 바는 한 줄에 모든 Step 그룹이 들어오도록 정사각형 셀을 사용한다. 칸 내부 채움 비율은 교사용에서는 해당 항목을 확인한 학생 수를 전체 참여자 수로 나눈 값으로, 학생용에서는 본인 확인 여부로 표현한다. 평균 상태바와 개인 카드 내부 조각 색은 초록색, 주황색, 보라색을 Step 순서대로 반복 사용한다.
+- `book-personal-detail`: 교사는 선택한 참여자 카드에서, 일반 사용자는 본인 카드에서 진입하는 오른쪽 영역의 개인 프로젝트 상세 화면. 교사용 학생 상세 화면은 프로젝트 관리 패널을 반복하지 않고 현재 선택한 Step에서 학생이 실제로 사용하는 활동과 자료 카드만 보여 준다. 학생 화면의 상세 헤더는 이전 Step 카드 목록으로 돌아가는 버튼 오른쪽에 큰 `나의 개발자실` 제목만 표시한다. 교사가 준비한 활동과 자료를 Step별 섹션으로 나누고, 한 Step 안의 활동·자료는 동일한 크기의 가로 카드 행으로 배치한다. 다음 Step은 새 줄의 별도 섹션으로 내려간다. 활동 카드에는 교사의 안내사항만 두고, 학생 답변이 필요한 활동도 답변 안함 카드와 같은 컴팩트 크기를 유지한다. 일반 사용자는 활동 카드 하단의 단일 `작성` 버튼으로 큰 작성 모달을 열고, 모달의 `저장` 버튼으로 답변 저장과 확인 처리를 동시에 실행한다. 저장 성공 시 작성 모달은 닫히고 교사용 진행 현황에는 확인 신호가 반영된다. 교사는 선택 학생의 답변과 활동·자료 확인 상태를 읽기 전용으로 확인하며, 학생 답변은 카드 확대 보기에서 확인한다. 교사가 활동을 열기 전까지 일반 사용자의 활동 작성과 활동 확인은 잠김 상태로 표시한다. 자료 카드는 같은 Step 행 안에서 제목·교사 입력 본문·링크·복사 명령과 확인 상태를 표시하고, 교사 입력 본문은 활동 안내와 동일한 컴팩트 읽기 영역(세이지 배경, 테두리 없음, 동일한 여백·텍스트 크기·56px 고정 높이, 긴 본문은 내부 스크롤과 확대 보기)으로 표시한다. 자료 확인 버튼도 활동의 기본 CTA 스타일을 공유한다. 학생 작성·편집 영역은 두지 않는다. 개인 카드 답변은 최상위 `dashboardText` 필드에 저장한다. 뒤로 명령으로 개인 카드 목록으로 돌아간다.
+- 일반 사용자는 이미 소속된 반에는 자동으로 들어가며, 소속이 없을 때는 참여 코드를 입력한다. 가입 허용 중인 반이 정확히 하나이고 코드가 준비된 경우에만 자동 연결을 시도한다.
+
+- `book-personal-expand-content`: 자료·활동·도움 글 확대 모달의 긴 본문은 높이를 축소하지 않는 하나의 읽기 표면으로 렌더링한다. 카드 배경이 본문 마지막 줄까지 이어지고 바깥 모달 본문 영역이 스크롤을 담당한다.
+
+## 5. States
+
+- Sidebar items have one edit command: the pencil opens single-item editing. Remove the duplicate expand-edit command; retain separate Step expansion and student enlargement. Right-side actions use 22px slots and 4px gaps in copy (resources only), image indicator, edit, delete order.
+
+- The overall progress table uses the shared student palette in participant order. All unlocked cells retain the same 14% student-colored fill; unchecked cells have a 1px 42% border, while checked cells have a 2px solid border with no central dot. The legend shows the same border distinction on a shared neutral background. Locked cells retain neutral hatching; latest completion retains its separate green corner marker. Cell dimensions stay unchanged.
+
+- Sidebar activity/resource pencil commands open the existing single-item edit modal, not the whole Step editor. Its activity/resource save action updates only the selected item while preserving sibling items and ordering. The separate Step and project edit commands keep their original scope.
+
+- The incomplete-checklist alert says `완료하지 않은 할 일이 남아 있습니다.` then `모든 할 일을 완료해야 확인으로 처리됩니다.` on a new line. Its `닫기` button dismisses both the alert and the enlarged activity modal without submitting completion; a detail panel stays open. Escape/backdrop dismiss only the alert. Checklist values persist when reopening, and completion remains gated on every task being checked.
+
+- Student detail panels constrain their body grid and image gallery to the available inner width, including scrollbar space. Long code previews must truncate inside their own row without enlarging sibling URLs, images, or confirmation controls; attached images retain their full aspect ratio and enlargement action.
+
+- Compact student code-copy items show the first two non-empty lines beneath their label in 12px monospace. Long lines use ellipsis within the available width; copying still uses the entire unmodified code text, including blank lines and indentation. Template previews use substituted values and never render code as HTML.
+
+- Incomplete checklists cannot be confirmed from student detail panels or enlarged modals. A body-portal alert dialog at z-index 4100 shows the two requested Korean sentences separated by a line break and one acknowledgement button. Dismissal preserves the underlying content and checklist; all tasks must be checked before completion saving and modal close. Existing checkbox autosave remains enabled. The alert traps focus, restores focus/scroll, and consumes Escape without closing the underlying modal.
+
+- The activity editor keeps a visible `코드 밖으로` toolbar command, enabled while the caret is inside a code block. It moves focus to a new ordinary paragraph immediately after that block without changing its code; Ctrl/Cmd+Enter and re-clicking the active code-format command use the same exit path. The toolbar wraps naturally on narrow screens.
+
+- Student activity/resource detail panels and enlarged modals display each code block as one full-width, 48px-minimum copy row (`</>`, code label, copy icon). Code content remains available to copying but is hidden from layout; multiple blocks are numbered. Success/failure feedback is separate from the stable row label. Teacher previews and editors retain expanded code. Template code uses the student's substituted values.
+
+- Activity formatting supports `pre`/`code` blocks through a compact `</>` toolbar command. Code preserves whitespace in a horizontally scrollable, monospace inset using existing surface/text/border tokens. Read-only blocks have a separate copy action with success/error feedback; copying excludes surrounding prose and does not toggle checklists. Templates preserve code formatting after variable substitution.
+
+- Student detail images (inline and attachments) open a body-portal lightbox at z-index 4000, filling the available viewport with object-fit contain. Closing via backdrop, Escape, or the close button preserves the underlying activity/checklist. Keyboard activation, focus trapping and restoration are supported; teacher image presentation remains separate.
+
+- Sidebar Step expansion actions are positioned relative to a dedicated header wrapper, never the accordion body. Header grid reserves equal 30px slots for expansion and collapse so long content cannot move the expansion icon or cover the title.
+
+- Teacher whole-class progress uses the supplied scoreboard structure: each activity/resource is a row grouped by Step, with a sticky 220px label column (144px mobile) and one 20px square per student in 24px columns. Compact numbered column headers and square tooltips identify students. Confirmed cells use sage #8cb78d/#78a67b, unconfirmed cells use resource surface/border tokens, locked cells use #d1d0ca/#eeede8 diagonal stripes, and the last completed item retains one green light per student. The viewport-sized modal (up to 1800px, 88dvh) remains independent of roster size, supports all students via scrolling, shares live progress, and preserves focus handling and empty states.
+
+- Step editors place the two add commands and the last item's URL input in one equal-width, three-column row, ordered activity add, resource add, URL. Controls are 48px high with 8px gaps and corners; body editors use the full available width. Other items retain their own URL field, and empty Steps retain the two add commands without a URL field.
+
+- Activity and resource card headers use 16px status, image, and expansion icons centered in equal 28px slots with 4px gaps (44px slots for coarse pointers). All icons share a center line without decorative backgrounds or borders. Confirmation status is an outline square when unconfirmed and a checked square in the existing completed green when confirmed. Status icons remain read-only with tooltip and accessible labels; locked items retain the lock icon.
+
+- 학생 왼쪽 패널은 현재 선택된 Step의 활동·자료만 표시한다. Step 목록으로 돌아가거나 다른 Step으로 바꾸어 선택 항목이 범위를 벗어나면 저장된 패널 선택도 지워 빈 패널을 유지한다. 같은 Step 내 항목 전환은 기존 콘텐츠 120ms 퇴장 후 새 콘텐츠 240ms 등장으로 이어지며 빠르게 연속 선택하면 마지막 항목만 표시한다. 패널 재오픈은 입력 상태를 유지하고, 항목 교체는 스크롤을 처음으로 되돌린다. 오른쪽 도움 글은 학생 화면에서도 그리드 열 안에서 중앙 폭을 밀어내며, 중앙 콘텐츠의 스크롤은 그 열 내부에서 처리한다. 교사 중앙 활동 카드의 잠금 버튼은 12px 글자와 줄바꿈 금지로 한 줄을 유지한다.
+
+- 학생 활동 패널은 기존 400ms 열 너비 전환과 함께 본문을 120ms 지연 후 240ms 동안 페이드·가로 이동(12px)으로 펼친다. 접을 때는 120ms 동안 사라지며 접힌 콘텐츠는 키보드와 보조 기술에서 제외한다. 열린 패널에서 다른 항목을 선택하면 새 콘텐츠가 240ms 페이드·세로 이동(8px)으로 나타난다. 전체 상세(제목·URL·본문·답변·저장)는 `--border` 1px 테두리, `--card-bg` 배경, 8px 모서리, 16px 안쪽 여백의 하나의 사각형 카드로 감싼다. 움직임 줄이기에서는 모든 학생 패널 전환을 생략한다.
+
+- Student checklists align the checkbox with the first text line at every text size. Only the checkbox toggles; text remains selectable. Each student's checks autosave independently. Confirm saves partial progress without completion; all checks plus Confirm marks completion. Save failures retain input and expose retry. Student panel selection and collapsed state survive STEP changes and reloads, scoped to user and class.
+- Teacher help sidebar includes compact student progress rows using existing participant colors and ordered square cells. The final completed cell carries a small green light with a white rim and subtle glow, without a number. Empty and long lists remain readable in the existing drawer width.
+
+- 활동·자료 메인 카드는 항상 제목, URL, 상태, 확대 명령과 하단 열기 명령만 담는 컴팩트 표면을 사용한다. 본문, 템플릿 입력, 답변 입력은 카드에서 렌더링하지 않는다. 학생의 하단 명령은 확인 여부와 관계없이 `패널에서 열기`이며 왼쪽 패널에서 전체 내용과 확인/저장을 제공한다. 패널과 확대 모달은 같은 입력 상태를 공유한다. 기존 카드의 14px 간격, 하단 버튼의 44px 조작 영역, 8px 모서리와 테마 색상을 유지한다. 헤더 아이콘은 위의 컴팩트 헤더 규칙을 따른다.
+- 기본 서식 도구의 체크리스트는 실제 체크박스와 항목 텍스트를 사용한다. 편집기 저장 시 체크리스트 서식을 유지하고 학생의 체크 상태는 교사 원본을 변경하지 않는다.
+
+- 활동 템플릿은 교사의 체크박스로 활성화한다. 안내사항의 `{{변수 이름}}`에서 중복을 제외한 입력창을 만들고, 학생 카드와 확대 모달은 현재 화면의 입력값을 공유한다. 입력값은 원본이나 다른 학생에게 저장하지 않으며, 모두 입력한 후 개인화된 일반 텍스트를 복사한다.
+
+- 교사용 활동·자료 카드는 개수가 적어도 왼쪽부터 12px 간격으로 연속 배치한다. 빈 그리드 칸을 유지해 카드 두 개가 화면 양쪽으로 벌어지지 않도록 한다.
+
+- 교사용 메인 활동·자료 목록은 남은 가운데 폭을 나눠 쓰는 반응형 격자로 배치한다. 카드의 최소 읽기 폭 220px를 확보할 수 없으면 다음 줄로 배치하며, 오른쪽 패널을 펼칠 때 카드나 하단 버튼이 가로 스크롤 영역 밖으로 잘리지 않아야 한다. 학생도 남은 중앙 폭에 맞춰 활동·자료 카드를 다음 줄로 재배치한다.
+
+- 양쪽 책방 패널은 독립적인 너비를 가진 같은 그리드의 열로 상단 메뉴와 본문을 함께 밀어낸다. 왼쪽은 280~340px, 오른쪽은 280~320px이며 접힌 레일은 각각 48px, 52px다. 열 전환은 400ms ease-in-out으로 이어지고 패널 본문은 고정된 읽기 폭에서 지연 페이드로 드러난다. 가운데 활동·자료 카드는 컨테이너 폭에 따라 220~340px로 조정되며 긴 행은 가로 스크롤한다. 좁은 화면은 중앙 최소 260px를 확보하고 작업 화면을 가로 스크롤한다. 움직임 줄이기 설정에서는 전환을 생략한다.
+
+- 반·차시 관리의 운영 중/보관 목록 모두 기존 경고색 버튼과 휴지통 아이콘에 `삭제` 문구를 함께 표시한다. 삭제는 항목 이름과 삭제 범위를 보여 주는 기존 확인 모달을 거치며, 처리 중에는 해당 행의 삭제 명령을 비활성화한다.
+- Inputs keep visible focus rings using the existing primary color.
+- Start and admin login controls use real buttons, preserve keyboard submission, and do not rely on placeholder-only labeling.
+- On mobile, the entry controls wrap into a two-column grid with full-width buttons so Korean labels do not clip.
+- 관리자 화면은 모바일에서 사용자 목록이 위쪽 밴드로 전환되고 히트맵은 셀 크기를 유지한 채 가로 스크롤한다.
+- 책방 홈은 넓은 화면과 좁은 브라우저 폭 모두 왼쪽 활동 패널과 오른쪽 본문이 100dvh 높이를 공유하는 분할 작업 화면을 유지한다. 좁은 화면에서는 최소 작업 폭을 두고 가로 스크롤을 허용해 활동 카드와 상태 버튼의 텍스트가 잘리지 않아야 한다.
+- 책방 왼쪽 패널은 접기 상태를 브라우저에 기억한다. 접히면 48px 세로 레일로 남고 오른쪽 대시보드가 넓어진다.
+- 책방 오른쪽 도움 글 서랍은 접기 상태를 브라우저에 기억한다. 접히면 52px 레일로 남고, 펼치면 도움 글 목록을 보여 준다. 학생이 목록을 누르면 기존 자료 확대 보기 표면을 재사용한 큰 읽기 전용 모달에서 제목·전체 본문·안전한 외부 링크를 본다. 교사의 목록 내 편집 흐름은 유지한다. 도움 글 모달은 닫기·Escape·배경 클릭과 키보드 포커스 순환을 지원하고, 닫으면 목록 버튼으로 포커스를 돌려준다.
+- 교사용 진척도 정보는 개인 카드 목록과 개인 카드 섹션 헤더의 평균 상태바에만 표시한다. 별도 오른쪽 서랍 패널이나 접힌 오른쪽 레일은 표시하지 않는다.
+- Step 아코디언 항목은 44px 이상의 터치 영역, 현재 Step 강조, 활동·자료 개수 배지를 제공한다. 새로고침하거나 기본 화면에 진입했을 때는 왼쪽 패널과 오른쪽 메인 화면 모두 모든 Step이 닫힌 상태로 시작한다. 항목을 누르면 같은 자리에서 활동과 자료가 펼쳐지고 다시 접힌다. 긴 한글 제목은 말줄임 처리하되 버튼 내부 텍스트가 겹치거나 잘리지 않아야 한다.
+- 학생용 개발자실 기본 화면은 개인 카드 목록이 아니라 Step 카드 목록으로 시작한다. 새로고침 후에는 어떤 Step 상세도 자동으로 열리지 않는다. 개인 프로젝트 상세 화면은 학생이 선택한 Step 하나만 표시하고, 교사용 개인 상세 화면은 모든 Step을 표시한다. 각 행의 활동·자료 카드는 같은 격자 폭과 높이를 유지하며 남은 중앙 폭에 맞춰 다음 줄로 배치한다. 답변 입력 영역과 저장 명령은 최소 44px 터치 영역을 제공하고, 고정 높이 카드의 하단 테두리가 잘리지 않아야 한다.
+- 프로젝트 편집기는 모바일에서도 입력과 추가·삭제 명령을 한 열로 유지하고, Step 흐름 항목과 저장 버튼은 최소 44px 터치 영역을 제공한다. Step이 많아지면 왼쪽 프로젝트 패널 안에서 세로 스크롤하되, 같은 Step을 가리키는 별도 목록과 별도 상세 카드가 동시에 나타나지 않아야 한다.
+- 일반 사용자 화면에는 출석 기록·출석부 명령을 노출하지 않는다. 교사용 개발자실 헤더에서도 별도 출석부 보기 버튼은 두지 않고, 수업 방송 흐름 안에서 필요한 출석 정보만 유지한다.
+- 교사용 개발자실의 상단 모드 버튼은 현재 `연수용` 또는 `교내용` 상태를 명확하게 보여 주고, 다시 누르면 같은 자리에서 반/차시 목록 필터가 즉시 전환되어야 한다. 선택한 모드는 브라우저에 기억하되 기존 클래스 문서에 모드 값이 없으면 연수용으로 취급한다.
+- 저장된 프로젝트에서도 편집 명령과 마지막 Step 아래의 Step 추가 명령을 유지한다. Step 추가는 기존 내용을 보존한 편집기를 열고 새 Step만 펼친다.
+
+- 컴팩트 활동·자료 카드의 URL 자리는 링크 유무와 잠김 상태에 관계없이 같은 높이를 유지한다. 카드 제목의 큰 글씨 규칙이 URL 글씨에 적용되지 않도록 구분한다.
+
+- 활동·자료에는 압축 이미지 여러 장을 순서대로 첨부할 수 있다. 확대 보기에서는 이미지 전체 비율을 유지하며, 교사는 이미지를 눌러 해당 장부터 발표 방송을 시작한다. 이미지 발표는 본문 대신 한 장을 크게 표시하고 이미지 순서와 이전·다음·발표 종료 명령을 유지한다. 학생 화면은 교사가 선택한 장을 동기화해 표시한다. 첨부·방송 처리 중에는 중복 명령을 막고 실패 시 입력과 현재 장을 유지한다. 이미지와 버튼은 키보드로 조작 가능하며 전환은 180ms 페이드, 움직임 줄이기에서는 생략한다.
+
+- 이미지 첨부 영역은 파일 선택 외에 파일 드롭과 클립보드 이미지 붙여넣기를 지원한다. 영역은 키보드 포커스 가능하며 12px 안내 문구로 클릭 후 Ctrl+V 또는 ⌘V를 설명한다. 파일이 올라오면 기존 primary 테두리와 primary-light 배경으로 강조한다. 기존 압축·8장·용량 제한과 처리 중 저장 차단을 모든 입력 경로에 동일하게 적용한다. 일반 텍스트 붙여넣기와 활동·자료 순서 이동은 가로채지 않는다.
+
+- 활동·자료 확대 읽기와 항목 편집 모달은 데스크톱 최대 700px(기존 1040px의 약 2/3), 교사 발표 모달은 최대 750px(기존 1120px의 약 2/3)로 줄인다. 모바일은 기존 화면 여백과 전체 가용 폭을 유지한다. 좁아진 항목 편집의 입력·내보내기는 한 열로 이어져 잘리지 않아야 한다.
+- 발표 모드 진입은 항상 현재 항목의 텍스트·URL 화면부터 시작하고, 다음은 해당 항목의 이미지 순서다. 다른 활동·자료로 이동하거나 끝에서 순환하지 않으며 첫 화면의 이전·마지막 화면의 다음은 비활성화한다. 확대 보기 이미지 직접 클릭은 같은 순서의 해당 이미지부터 시작한다. 텍스트 화면에는 첨부 이미지를 중복 표시하지 않는다.
+- 각 첨부 이미지에는 대·중·소 크기를 선택한다. 기존 이미지와 신규 이미지의 기본값은 중이며, 이미지와 크기는 순서 변경·삭제·저장·내보내기에서 함께 이동한다. 방송 이미지의 가용 폭과 높이에 대해 대 100%, 중 70%, 소 45%의 박스로 맞추고 종횡비를 유지하며 중앙에 표시한다. 크기 선택은 12px 레이블과 44px 조작 높이, 기존 테두리·배경·포커스 토큰을 사용한다.
+
+- 교사 발표 모달은 짧은 텍스트·긴 텍스트·이미지 모두 같은 높이 min(90dvh, 820px)를 유지한다. 모바일은 기존 88vh 상한을 유지하고 긴 본문만 내부 스크롤한다. 머리글과 이전·다음·종료 버튼은 줄어들지 않으며 학생 전체 화면은 100dvh를 유지한다.
+- 체크리스트 Enter는 커서 뒤의 텍스트와 서식을 새 미체크 항목으로 이동하며 이후 항목과 입력 위치를 보존한다. Shift+Enter는 같은 항목 안에서 줄바꿈하고 빈 항목의 Enter는 그 위치에서 목록을 종료한다. 한글 조합 중 Enter는 항목을 나누지 않는다.
+
+- 교사용 활동·자료 카드의 첨부 이미지 표시는 헤더 명령 옆의 14px 선형 이미지 아이콘을 사용한다. `--text-sub` 색상, 배경·테두리·애니메이션 없음으로 절제하며 이미지가 없거나 학생 화면이면 숨긴다. 보조 기술과 마우스 설명에는 첨부 이미지 수를 제공한다.
+
+- 활동·자료 카드의 확대 명령은 이미지 첨부 표시와 같은 14px/1.6px 선형 아이콘과 `--text-sub` 색상을 사용한다. 배경·테두리·그림자는 제거하고 hover 시 `--primary-dark`, 키보드 focus-visible 시 기존 primary 윤곽선을 표시한다. 메인 카드의 28px 클릭 영역과 터치 44px 영역, 관리 패널의 기존 클릭 영역은 유지한다.
+
+- 카드 헤더의 보조 정보는 확인 상태 → 이미지 첨부 표시 → 확대 순서로 배치한다. 자료 복사 명령이 있으면 이미지 표시 앞에 두어 이미지·확대 아이콘은 나란히 유지한다.
+
+- 학생 왼쪽 패널은 접속 중 활동·자료가 잠김에서 열림으로 바뀔 때 해당 Step과 항목을 선택하고 펼친다. 최초 조회는 자동으로 열지 않는다. 동시에 여러 항목이 열리면 프로젝트 순서의 마지막 항목 하나만 표시하며, 이미 처리한 요청은 학생이 직접 닫은 패널을 다시 열지 않는다.
+- 프로젝트 첨부 이미지는 확인된 Firebase Storage 버킷에 저장하고 문서에는 HTTPS 주소를 보관한다. 기존 인라인 이미지는 저장 시 변환하며 이미지 순서와 크기 설정을 유지한다. 업로드 또는 문서 저장 실패 시 편집 내용을 유지하고 저장 모달 안에 오류를 표시한다. 업로드가 실패하면 프로젝트 문서를 저장하지 않는다.

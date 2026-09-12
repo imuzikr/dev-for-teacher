@@ -1,0 +1,27 @@
+node_modules/
+.next/
+out/
+public/pdf.worker.min.mjs
+.env*
+!.env.example
+.firebaserc
+.vercel/
+*-firebase-adminsdk-*.json
+service-account*.json
+serviceAccount*.json
+credentials*.json
+*backup*.json
+backups/
+firestore-export*/
+firebase-export*/
+firebase-export-metadata.json
+*.log
+test-results/
+playwright-report/
+npm-debug.log*
+install.log
+
+# Firestore 에뮬레이터 산출물 (규칙 테스트 실행 시 생성)
+firestore-debug.log
+firebase-debug.log
+ui-debug.log

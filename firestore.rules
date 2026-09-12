@@ -1,0 +1,963 @@
+rules_version = '2';
+
+// =============================================================
+// Firestore 보안 규칙 — dev-for-teachers
+// -------------------------------------------------------------
+// 원칙
+//  · 로그인하지 않으면 아무것도 못 읽고/못 씀 (기본 거부)
+//  · 질문 게시판(questions·answers·notices·keywords)은 전체 공유
+//  · 공부방(반)의 모든 자산(보드·카드·누가기록)은
+//    그 반을 개설한 교사(classes.createdBy)에게 귀속.
+//    Firestore에 최초 등록된 관리자만 전체 접근.
+//  · 반이 '보관(archived)' 상태면: 소유 교사도 그 반의 데이터는 읽기만
+//    가능(쓰기 전면 차단, 보관 해제해야 편집 가능) / 학생은 읽기도 불가.
+//    classes 문서 자체(이름 수정·보관 토글)는 예외 — 항상 소유 교사가 수정 가능.
+// 배포:  firebase deploy --only firestore:rules
+// =============================================================
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() { return request.auth != null; }
+    function uid() { return request.auth.uid; }
+    function profileRole() {
+      return signedIn() && exists(/databases/$(database)/documents/users/$(uid()))
+             ? get(/databases/$(database)/documents/users/$(uid())).data.get('role', '')
+             : '';
+    }
+    function userRole() {
+      return request.auth.token.get('role', '') != ''
+             ? request.auth.token.get('role', '')
+             : profileRole();
+    }
+    function isGuestTeacher() {
+      return signedIn()
+             && request.auth.token.firebase.sign_in_provider == 'anonymous';
+    }
+    function isGuestUserProfile(userId) {
+      return isGuestTeacher()
+             && userId == uid()
+             && request.resource.data.keys().hasOnly([
+                  'realName', 'role', 'requestedRole', 'schoolName', 'createdAt'
+                ])
+             && request.resource.data.role == 'student'
+             && request.resource.data.realName is string
+             && request.resource.data.schoolName is string
+             && request.resource.data.createdAt == request.time;
+    }
+
+    function adminPath() {
+      return /databases/$(database)/documents/system/admin;
+    }
+    function isVerifiedGoogleUser() {
+      return signedIn()
+             && request.auth.token.email_verified == true
+             && request.auth.token.firebase.sign_in_provider == 'google.com';
+    }
+    function isAdmin() {
+      return signedIn()
+             && exists(adminPath())
+             && get(adminPath()).data.uid == uid();
+    }
+    function isAdminAfterWrite() {
+      return signedIn()
+             && existsAfter(adminPath())
+             && getAfter(adminPath()).data.uid == uid();
+    }
+    // 운영 기능 접근 관문 — 최고 관리자와 승인된 교사를 허용합니다.
+    // 반 단위 쓰기는 ownsClassEditable()에서 소유권과 보관 상태를 다시 좁힙니다.
+    function isTeacher() {
+      return isAdmin() || userRole() == 'teacher';
+    }
+    function changedOnly(keys) {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly(keys);
+    }
+    function writesProfileOnly(keys, removableKeys) {
+      return request.resource.data.diff(resource.data).addedKeys().hasOnly(keys)
+             && request.resource.data.diff(resource.data).changedKeys().hasOnly(keys)
+             && request.resource.data.diff(resource.data).removedKeys().hasOnly(removableKeys);
+    }
+
+    match /system/{docId} {
+      allow get: if docId == 'admin' && isVerifiedGoogleUser();
+      allow create: if docId == 'admin'
+                    && isVerifiedGoogleUser()
+                    && !exists(adminPath())
+                    && request.resource.data.keys().hasOnly(['uid', 'createdAt'])
+                    && request.resource.data.uid == uid()
+                    && request.resource.data.createdAt == request.time;
+      allow list, update, delete: if false;
+    }
+
+    // ── 반 소유권 헬퍼 ────────────────────────────────────────
+    // 반 개설자 uid / 그 반의 소유 교사인지 / 소속 멤버인지.
+    function classOwnerUid(cId) {
+      return get(/databases/$(database)/documents/classes/$(cId)).data.createdBy;
+    }
+    function classExists(cId) {
+      return exists(/databases/$(database)/documents/classes/$(cId));
+    }
+    function classPurpose(cId) {
+      return get(/databases/$(database)/documents/classes/$(cId)).data.get('purpose', 'training');
+    }
+    function isInternalClass(cId) {
+      return classPurpose(cId) == 'internal';
+    }
+    function isClassArchived(cId) {
+      return get(/databases/$(database)/documents/classes/$(cId)).data.get('archived', false) == true;
+    }
+    function isClassActive(cId) {
+      let data = get(/databases/$(database)/documents/classes/$(cId)).data;
+      return data.get('accessVersion', 0) == 2 && data.get('archived', true) == false;
+    }
+    function ownsClass(cId) {
+      // isTeacher()가 false면 &&에서 단락되어 get을 수행하지 않음(학생 비용 없음)
+      return isTeacher() && classOwnerUid(cId) == uid();
+    }
+    // 쓰기 전용 판정 — 소유 교사라도 반이 보관 상태면 그 반의 데이터는 편집 불가.
+    // (classes 문서 자체의 수정 — 이름 변경·보관 토글 — 은 이 함수를 쓰지 않고
+    //  ownsClass만으로 항상 허용합니다. 그래야 보관 해제 자체가 막히지 않음)
+    function ownsClassEditable(cId) {
+      return ownsClass(cId) && !isClassArchived(cId);
+    }
+    // 보관된 반은 학생도 접근 불가 — 소속 여부와 별개로 항상 거부.
+    function isClassMember(cId) {
+      return isClassActive(cId)
+             && exists(/databases/$(database)/documents/memberships/$(uid() + '_' + cId));
+    }
+    function hasClassMembership(memberUid, cId) {
+      return exists(/databases/$(database)/documents/memberships/$(memberUid + '_' + cId));
+    }
+    function validJoinCode(code) {
+      return code is string && code.matches('^[0-9]{6}$');
+    }
+    function isClassJoinOpen(cId, code) {
+      return validJoinCode(code)
+             && isClassActive(cId)
+             && get(/databases/$(database)/documents/classes/$(cId)).data.get('joinEnabled', false) == true
+             && get(/databases/$(database)/documents/classJoinSecrets/$(cId)).data.joinCode == code;
+    }
+    function validClassMetadata() {
+      return !('joinCode' in request.resource.data)
+             && request.resource.data.accessVersion == 2
+             && request.resource.data.archived is bool;
+    }
+    function validOwnedClassUpdate() {
+      return changedOnly(['name', 'archived', 'joinEnabled'])
+             && request.resource.data.createdBy == resource.data.createdBy
+             && request.resource.data.get('name', '') is string
+             && request.resource.data.get('name', '').size() > 0
+             && request.resource.data.get('name', '').size() <= 80
+             && request.resource.data.get('archived', false) is bool
+             && request.resource.data.get('joinEnabled', false) is bool;
+    }
+    function validMembershipId(mId) {
+      return mId == (request.resource.data.uid + '_' + request.resource.data.classId);
+    }
+    function validCodeMembershipCreate(mId) {
+      let claim = getAfter(/databases/$(database)/documents/classJoinClaims/$(uid())).data;
+      return request.resource.data.uid == uid()
+             && validMembershipId(mId)
+             && request.resource.data.keys().hasOnly(['uid', 'classId', 'joinedAt', 'accessVersion'])
+             && request.resource.data.accessVersion == 2
+             && claim.uid == uid()
+             && claim.classId == request.resource.data.classId
+             && claim.createdAt == request.time
+             && isClassJoinOpen(request.resource.data.classId, claim.joinCode)
+             && request.resource.data.joinedAt == request.time;
+    }
+    function validInheritedMembershipCreate(mId) {
+      return request.resource.data.keys().hasOnly([
+               'uid', 'classId', 'joinedAt', 'accessVersion', 'inheritedFromClassId'
+             ])
+             && request.resource.data.uid is string
+             && validMembershipId(mId)
+             && request.resource.data.accessVersion == 2
+             && request.resource.data.inheritedFromClassId is string
+             && request.resource.data.classId != request.resource.data.inheritedFromClassId
+             && classExists(request.resource.data.classId)
+             && classExists(request.resource.data.inheritedFromClassId)
+             && !isClassArchived(request.resource.data.classId)
+             && !isClassArchived(request.resource.data.inheritedFromClassId)
+             && hasClassMembership(request.resource.data.uid, request.resource.data.inheritedFromClassId)
+             && isInternalClass(request.resource.data.classId)
+             && isInternalClass(request.resource.data.inheritedFromClassId)
+             && classOwnerUid(request.resource.data.classId)
+                  == classOwnerUid(request.resource.data.inheritedFromClassId)
+             && request.resource.data.joinedAt == request.time
+             && (
+                  isAdmin()
+                  || (
+                       ownsClassEditable(request.resource.data.classId)
+                       && ownsClass(request.resource.data.inheritedFromClassId)
+                     )
+                );
+    }
+
+    // ── 공부방 보드 헬퍼 ──────────────────────────────────────
+    function studyBoardClassId(bId) {
+      return get(/databases/$(database)/documents/studyBoards/$(bId)).data.classId;
+    }
+    function ownsBoard(bId) {
+      return ownsClass(studyBoardClassId(bId));
+    }
+    function ownsBoardEditable(bId) {
+      return ownsClassEditable(studyBoardClassId(bId));
+    }
+    function isBoardClassMember(bId) {
+      return isClassMember(studyBoardClassId(bId));
+    }
+    // editMode가 없는 보드 문서(콘솔에서 직접 만들었거나 예전 데이터)에서도
+    // 안전하게 판정합니다. 직접 참조(.editMode)하면 필드가 없을 때 규칙 평가가
+    // 오류로 끝나 학생 카드 쓰기가 통째로 막힙니다. 보드는 항상 'open'으로
+    // 만들어지므로 기본값도 'open'이 맞습니다.
+    function isBoardLocked(bId) {
+      return get(/databases/$(database)/documents/studyBoards/$(bId)).data.get('editMode', 'open') == 'locked';
+    }
+    // '선생님 보드'(type: notice) — 교사 전용 쓰기. 학생은 읽기만(첨부 다운로드 포함).
+    function isNoticeBoard(bId) {
+      return get(/databases/$(database)/documents/studyBoards/$(bId)).data.type == 'notice';
+    }
+    // 모둠 활동 보드 여부 / '함께 보기' 여부
+    function isGroupBoard(bId) {
+      return get(/databases/$(database)/documents/studyBoards/$(bId)).data.get('activityType', 'individual') == 'group';
+    }
+    function isSharedBoard(bId) {
+      return get(/databases/$(database)/documents/studyBoards/$(bId)).data.viewMode == 'shared';
+    }
+    // 이 카드가 모둠 카드이고 내가 그 모둠의 구성원인지
+    function isMyGroupCard() {
+      return resource.data.get('memberUids', []).hasAny([uid()]);
+    }
+
+    // ── 사용자 프로필 ─────────────────────────────────────────
+    // 학교 이름·성명 프로필 정보가 여기에만 있으므로, 읽기는 본인+교사로 제한.
+    // (질문 게시판은 전체 공유라 교사가 타 반 학생 실명도 확인해야 하므로 교사 전체 허용)
+    match /users/{userId} {
+      allow read: if signedIn() && (userId == uid() || isTeacher());
+      // 일반 사용자는 익명 프로필만, 지정 Google 계정은 관리자 프로필만 생성합니다.
+      allow create: if signedIn() && userId == uid() && (
+        isGuestUserProfile(userId)
+        || (isAdminAfterWrite() && request.resource.data.role == 'admin')
+      );
+      // 쓰기 범위 — '누가' 뿐 아니라 '어떤 필드를' 쓰는지까지 제한합니다.
+      //  · 최고 관리자: 전체. 역할 부여와 부트스트랩 자가 치유(lib/auth.js가
+      //      초기 관리자 문서에 role='admin'을 맞추는 것)가 여기에 해당합니다.
+      //  · 본인: 학교 이름·성명·알림토큰·신청 표시만. 닉네임·이메일·학번·역할 불가.
+      //  · 교사: 학생 관리에 실제로 쓰는 필드만(StudentEditModal의 학교·성명 수정,
+      //      탈퇴 신청 거절). role은 목록에 없어 교사가 역할을 건드릴 수 없습니다.
+      //      대상도 학생(또는 본인)으로 좁혀, 다른 교사의 프로필은 못 고칩니다.
+      //      선생님 신청 승인·거절(requestedRole)은 최고 관리자 전용 화면이라
+      //      교사 목록에서 뺐습니다.
+      allow update: if signedIn() && (
+        isAdmin()
+        || (userId == uid() && isAdminAfterWrite()
+            && request.resource.data.role == 'admin')
+        || (userId == uid()
+            && writesProfileOnly(
+              ['schoolName','realName','fcmTokens','requestedRole',
+               'withdrawRequested','withdrawRequestedAt'],
+              ['email','displayName','emoji','studentId']
+            ))
+        || (isTeacher()
+            && (userId == uid() || resource.data.get('role', 'student') == 'student')
+            && writesProfileOnly(
+              ['schoolName','realName','withdrawRequested','withdrawRequestedAt'],
+              ['displayName','emoji','email','studentId']
+            ))
+      );
+      allow delete: if isAdmin();
+
+    }
+
+    // ── 질문 (전체 공유) ──────────────────────────────────────
+    match /questions/{qId} {
+      allow read: if signedIn();
+      // createdAt은 반드시 서버 시각. 임의 값(특히 미래 날짜)을 넣으면
+      // 주간 랭킹 집계 창에서 영원히 빠지지 않습니다.
+      allow create: if signedIn() && request.resource.data.authorId == uid()
+                    && request.resource.data.createdAt == request.time
+                    && request.resource.data.answerCount == 0
+                    && request.resource.data.meTooIds == []
+                    && request.resource.data.resolved == false;
+      allow update: if signedIn() && (
+        (resource.data.authorId == uid()
+          && changedOnly(['title','content','keyword','imageUrl','images',
+                          'resolved','reflectionPending','understoodAnswerId','reflection']))
+        || isTeacher()
+        || (changedOnly(['meTooIds'])
+            && resource.data.authorId != uid()
+            // 배열에 같은 uid가 여러 번 들어가지 못하게 막습니다.
+            // 아래 두 줄은 집합(toSet)으로만 비교하기 때문에, 중복만으로는
+            // 차집합이 달라지지 않아 ['a','나','나','나'] 같은 배열이 그대로
+            // 통과했습니다. 공감 수와 랭킹은 배열 길이로 세므로(questionRanking.js),
+            // 학생이 자기 uid를 여러 번 넣어 수치를 부풀릴 수 있었습니다.
+            && request.resource.data.meTooIds.size()
+                 == request.resource.data.meTooIds.toSet().size()
+            && request.resource.data.meTooIds.toSet()
+                 .difference(resource.data.meTooIds.toSet()).hasOnly([uid()])
+            && resource.data.meTooIds.toSet()
+                 .difference(request.resource.data.meTooIds.toSet()).hasOnly([uid()]))
+      );
+      allow delete: if signedIn() && (resource.data.authorId == uid() || isTeacher());
+
+      match /answers/{aId} {
+        allow read: if signedIn();
+        allow create: if signedIn() && request.resource.data.authorId == uid()
+                      && request.resource.data.createdAt == request.time;
+        allow update: if signedIn() && (
+          (resource.data.authorId == uid()
+            && changedOnly(['content','imageUrl','images']))
+          || isTeacher()
+          || (changedOnly(['understood'])
+              && get(/databases/$(database)/documents/questions/$(qId)).data.authorId == uid())
+        );
+        allow delete: if signedIn() && (resource.data.authorId == uid() || isTeacher());
+      }
+    }
+
+    // ── 공지 — 교사만 작성, 삭제는 작성한 본인이나 최고 관리자만 ──
+    //   (다른 반 교사가 남의 공지를 지울 수 없도록 — 공지는 전체 공유라
+    //    작성자 제한이 없으면 아무나 서로의 공지를 지울 수 있었습니다)
+    match /notices/{nId} {
+      allow read: if signedIn();
+      allow create: if isTeacher() && request.resource.data.authorId == uid();
+      allow delete: if isAdmin() || (isTeacher() && resource.data.authorId == uid());
+    }
+
+    // ── 키워드 — 읽기 모두, 생성/수정/삭제는 교사 (전체 공유) ──
+    match /keywords/{kId} {
+      allow read: if signedIn();
+      allow create, update, delete: if isTeacher();
+    }
+
+    // ── meta/keywordsSeeded — 기본 키워드를 이미 한 번 심었는지 기록 ──
+    //  · keywords 컬렉션이 비어 있을 때, "한 번도 안 심음"과 "교사가 전부
+    //    지움"을 구분하기 위한 플래그. 없으면(과거 시드 이력 없음) 기본
+    //    키워드를 심고, 있으면 비워 둔 채로 둡니다.
+    match /meta/{docId} {
+      allow read: if signedIn();
+      allow write: if isTeacher();
+    }
+
+    // ── 반(클래스) ────────────────────────────────────────────
+    //  · 이름은 참여할 반을 찾기 위한 공개 메타데이터 → 읽기는 로그인 사용자.
+    //    교사 화면은 본인 개설 반만 클라이언트에서 필터링해 표시.
+    //  · 생성·수정·삭제: 관리자 전용.
+    match /classes/{cId} {
+      allow read: if signedIn() && (isAdmin() || ownsClass(cId)
+                    || (resource.data.get('accessVersion', 0) == 2
+                        && resource.data.get('archived', true) == false));
+      allow create: if isAdmin() && request.resource.data.createdBy == uid()
+                       && validClassMetadata();
+      allow update: if (isAdmin() && validClassMetadata())
+                       || (ownsClass(cId) && validOwnedClassUpdate());
+      allow delete: if isAdmin();
+
+      // ── 언제든 질문하기(손들기) ─────────────────────────────
+      //  · 경로 = classes/{classId}/questionSignals/{uid}
+      //  · 학생은 자기 손들기만 켜고/끄고, 담당 교사는 반 전체 목록만 확인합니다.
+      match /questionSignals/{studentUid} {
+        function validNote() {
+          return !('note' in request.resource.data)
+                 || (request.resource.data.note is string
+                     && request.resource.data.note.size() <= 1000);
+        }
+        allow get: if signedIn() && (
+          isAdmin()
+          || ownsClass(cId)
+          || (studentUid == uid() && isClassMember(cId))
+        );
+        allow list: if signedIn() && (
+          isAdmin()
+          || ownsClass(cId)
+        );
+        allow create: if signedIn()
+                      && studentUid == uid()
+                      && request.resource.data.uid == uid()
+                      && request.resource.data.classId == cId
+                      && isClassMember(cId)
+                      && request.resource.data.createdAt == request.time
+                      && validNote()
+                      && request.resource.data.updatedAt == request.time;
+        allow update: if signedIn()
+                      && studentUid == uid()
+                      && resource.data.uid == uid()
+                      && request.resource.data.uid == resource.data.uid
+                      && request.resource.data.classId == cId
+                      && request.resource.data.createdAt == resource.data.createdAt
+                      && isClassMember(cId)
+                      && validNote()
+                      && request.resource.data.updatedAt == request.time;
+        allow delete: if signedIn() && (
+          (studentUid == uid() && isClassMember(cId))
+          || isAdmin()
+          || ownsClassEditable(cId)
+        );
+      }
+
+      // ── 기존 출석 기록 ─────────────────────────────────────
+      // 학생 화면의 출석 기능은 제거되었습니다. 과거 기록은 관리자만 읽고,
+      // 클라이언트에서는 새 기록을 만들거나 수정·삭제할 수 없습니다.
+      match /attendanceRecords/{recordId} {
+        allow read: if isAdmin();
+        allow create, update, delete: if false;
+      }
+
+      // ── 참여 전광판 자리표 ─────────────────────────────────
+      //  · default: 수업 준비에서 만든 기본 자리표
+      //  · daily_YYYY-MM-DD: 발표 중 임시 이동한 당일 자리표
+      match /seatLayouts/{layoutId} {
+        allow read: if signedIn() && (isAdmin() || ownsClass(cId));
+        allow create, update: if signedIn()
+                              && (isAdmin() || ownsClassEditable(cId))
+                              && request.resource.data.classId == cId
+                              && request.resource.data.layoutId == layoutId
+                              && request.resource.data.seats is list
+                              && request.resource.data.seats.size() <= 30;
+        allow delete: if signedIn() && (isAdmin() || ownsClassEditable(cId));
+      }
+
+      // ── 참여 전광판 기본 모둠 구성 ─────────────────────────
+      //  · 반 단위 장기 모둠입니다. 참여 전광판의 모둠별 보기에서만 씁니다.
+      match /groupAssignments/{assignmentId} {
+        allow read: if signedIn() && (isAdmin() || ownsClass(cId));
+        allow create, update: if signedIn()
+                              && (isAdmin() || ownsClassEditable(cId))
+                              && assignmentId == 'default'
+                              && request.resource.data.classId == cId
+                              && request.resource.data.groups is list
+                              && request.resource.data.groups.size() <= 6;
+        allow delete: if signedIn() && (isAdmin() || ownsClassEditable(cId));
+      }
+    }
+
+    match /classJoinSecrets/{cId} {
+      allow read, delete: if isAdmin();
+      allow create, update: if isAdmin()
+                            && request.resource.data.keys().hasOnly(['joinCode'])
+                            && validJoinCode(request.resource.data.joinCode);
+    }
+    match /classJoinLookup/{code} {
+      allow get: if isAdmin() || (signedIn() && validJoinCode(code)
+                    && resource.data.keys().hasOnly(['classId'])
+                    && isClassJoinOpen(resource.data.classId, code));
+      allow list, delete: if isAdmin();
+      allow create, update: if isAdmin() && validJoinCode(code)
+                            && request.resource.data.keys().hasOnly(['classId'])
+                            && request.resource.data.classId is string
+                            && request.resource.data.classId.size() > 0;
+    }
+    match /classJoinClaims/{claimUid} {
+      allow read, delete: if isAdmin();
+      allow create, update: if signedIn() && claimUid == uid()
+                            && request.resource.data.keys().hasOnly(['uid', 'classId', 'joinCode', 'createdAt'])
+                            && request.resource.data.uid == uid()
+                            && request.resource.data.classId is string
+                            && request.resource.data.createdAt == request.time
+                            && isClassJoinOpen(request.resource.data.classId, request.resource.data.joinCode);
+    }
+
+    // Student reads are per-class and require migrated, code-free documents.
+    match /memberships/{mId} {
+      allow get: if signedIn() && (
+        (!exists(/databases/$(database)/documents/memberships/$(mId))
+          && mId.size() > uid().size() + 1
+          && mId[0:uid().size() + 1] == uid() + '_')
+        || isAdmin() || ownsClass(resource.data.classId)
+        || (resource.data.uid == uid()
+            && resource.data.get('accessVersion', 0) == 2
+            && !('joinCode' in resource.data)
+            && isClassActive(resource.data.classId))
+      );
+      allow list: if isAdmin() || ownsClass(resource.data.classId);
+      allow create: if signedIn()
+                    && (
+                         validCodeMembershipCreate(mId)
+                         || validInheritedMembershipCreate(mId)
+                       );
+      // 학생 본인의 직접 '반 나가기'는 허용하지 않습니다. 소속 변경은
+      // 담당 교사/관리자가 관리합니다.
+      allow delete: if signedIn() && (
+        isAdmin() || ownsClassEditable(resource.data.classId)
+      );
+    }
+
+    // ── 수업 자료(수업하기) — 만든 선생님 본인만. 학생은 읽지 않습니다. ──
+    //  · 슬라이드 이미지 URL과 장별 메모를 담습니다. 메모는 교사 전용이라
+    //    학생에게 절대 노출되면 안 되므로 읽기를 소유 교사로 좁힙니다.
+    //  · 학생이 수업 중 보는 슬라이드는 방송 문서(broadcasts)에 실린
+    //    '현재 장 이미지 URL' 하나뿐입니다.
+    match /lessons/{lId} {
+      allow read: if isAdmin() || (isTeacher() && resource.data.ownerId == uid());
+      allow create: if isTeacher() && request.resource.data.ownerId == uid();
+      allow update, delete: if isAdmin()
+                            || (isTeacher() && resource.data.ownerId == uid());
+    }
+
+    // ── 발표 강제 전환(방송) — 문서 ID = classId. 있으면 방송 중, 없으면 아님. ──
+    //  · 반 소유 교사/관리자만 켜고 끌 수 있고, 그 반 소속 학생은 읽기만.
+    //  · 문서 ID가 곧 classId라 get() 없이 바로 판정합니다.
+    match /broadcasts/{classId} {
+      allow read: if isAdmin() || ownsClass(classId) || isClassMember(classId);
+      allow create, update, delete: if isAdmin() || ownsClassEditable(classId);
+    }
+
+    // ── 참여 상태 — 발표 중 학생 화면이 보이는지(교사 전광판용) ──
+    //  · 문서 ID = `{uid}_{classId}`. 학생은 자기 것만 쓰고, 읽기는 담당 교사만.
+    //  · 화면이 보이는지(visible)와 갱신 시각뿐이라 실명·내용은 담지 않습니다.
+    match /presence/{pId} {
+      allow read: if isAdmin() || ownsClass(resource.data.classId);
+      allow create, update: if signedIn()
+                            && request.resource.data.uid == uid()
+                            && pId == (uid() + '_' + request.resource.data.classId)
+                            && request.resource.data.visible is bool
+                            && isClassMember(request.resource.data.classId);
+      allow delete: if isAdmin()
+                    || (resource.data.uid == uid() && isClassMember(resource.data.classId))
+                    || ownsClassEditable(resource.data.classId);
+    }
+
+    // ── 누가기록(학생 관찰 메모) — 반 소유 교사/관리자 전용 (학생 열람 불가) ──
+    match /studentNotes/{noteId} {
+      allow read: if isAdmin()
+                  || (resource.data.classId != null && ownsClass(resource.data.classId));
+      allow create: if (isAdmin()
+                        || (request.resource.data.classId != null
+                            && ownsClassEditable(request.resource.data.classId)))
+                    && request.resource.data.teacherId == uid()
+                    && request.resource.data.studentUid is string;
+      allow update, delete: if isAdmin()
+                            || (resource.data.classId != null && ownsClassEditable(resource.data.classId));
+    }
+
+    // ── 공부방 보드 — 읽기는 로그인 사용자(메타데이터), 쓰기는 반 소유 교사/관리자 ──
+    match /studyBoards/{bId} {
+      allow read: if signedIn() && (isAdmin() || ownsClass(resource.data.classId)
+                                    || isClassMember(resource.data.classId));
+      allow create: if isAdmin()
+                    || (isTeacher() && ownsClassEditable(request.resource.data.classId));
+      allow update, delete: if isAdmin() || ownsClassEditable(resource.data.classId);
+
+      match /cards/{cardId} {
+        // 읽기 — 본인 카드(0 get, 최우선) / 관리자 / 반 소유 교사 / 반 멤버.
+        // 단, 모둠 보드가 '자기 모둠만'(private)일 때 반 멤버는 자기 모둠
+        // 카드만 읽을 수 있음(memberUids array-contains 쿼리로 접근).
+        // '함께 보기'(shared)면 다른 모둠 카드도 읽기 가능(수정은 불가).
+        allow read: if signedIn() && (
+          isAdmin()
+          || ownsBoard(bId)
+          || (isBoardClassMember(bId)
+              && (
+                   !isGroupBoard(bId)
+                   || isSharedBoard(bId)
+                   || isMyGroupCard()
+                 ))
+        );
+        // 생성 — 관리자/소유 교사는 자유(모둠 카드도 교사가 생성. 단, 보관 중엔 불가).
+        //   학생은 (문서ID=uid) + 반 멤버 + 잠금 아님 + notice 아님 + 모둠 보드 아님.
+        allow create: if signedIn()
+                      && request.resource.data.authorId == uid()
+                      && (
+                           isAdmin()
+                           || ownsBoardEditable(bId)
+                           || (cardId == uid()
+                               && isBoardClassMember(bId)
+                               && !isBoardLocked(bId)
+                               && !isNoticeBoard(bId)
+                               && !isGroupBoard(bId))
+                         );
+        // 수정 — 관리자/소유 교사(보관 중엔 불가), 본인 카드(작성자 불변·멤버·
+        //   잠금 아님·notice 아님), 또는 내 모둠 카드(내용 필드만 — 모둠
+        //   명단·대표·작성자는 교사만 변경).
+        allow update: if signedIn() && (
+          isAdmin()
+          || ownsBoardEditable(bId)
+          || (cardId == uid()
+              && request.resource.data.authorId == resource.data.authorId
+              && isBoardClassMember(bId)
+              && !isBoardLocked(bId)
+              && !isNoticeBoard(bId))
+          || (isMyGroupCard()
+              && isBoardClassMember(bId)
+              && !isBoardLocked(bId)
+              && changedOnly(['title','content','imageUrl','attachments','updatedAt']))
+        );
+        // 삭제 — 관리자 또는 반 소유 교사만(보관 중엔 불가). 학생은 자기
+        //   카드도 수정만 가능하고 삭제는 못 합니다(실수로 지운 제출물을
+        //   되살릴 방법이 없어 삭제 권한을 교사에게만 둡니다).
+        allow delete: if signedIn() && (isAdmin() || ownsBoardEditable(bId));
+      }
+    }
+
+    function bookActivityClassId(aId) {
+      return get(/databases/$(database)/documents/bookActivities/$(aId)).data.classId;
+    }
+    function ownsBookActivity(aId) {
+      return ownsClass(bookActivityClassId(aId));
+    }
+    function ownsBookActivityEditable(aId) {
+      return ownsClassEditable(bookActivityClassId(aId));
+    }
+    function isBookActivityMember(aId) {
+      return isClassMember(bookActivityClassId(aId));
+    }
+    function isBookActivityLocked(aId) {
+      return get(/databases/$(database)/documents/bookActivities/$(aId)).data.get('locked', false) == true;
+    }
+    function validBookProject(classId) {
+      return request.resource.data.keys().hasOnly([
+               'classId', 'title', 'version', 'steps', 'confirmableItemKeys', 'createdBy', 'updatedAt'
+             ])
+             && request.resource.data.classId == classId
+             && request.resource.data.title is string
+             && request.resource.data.title.size() > 0
+             && request.resource.data.title.size() <= 100
+             && request.resource.data.version is string
+             && request.resource.data.version.size() > 0
+             && request.resource.data.steps is list
+             && request.resource.data.steps.size() <= 30
+             && request.resource.data.confirmableItemKeys is list
+             && request.resource.data.confirmableItemKeys.size() <= 300
+             && request.resource.data.createdBy == uid()
+             && request.resource.data.updatedAt == request.time;
+    }
+    function validBookHelpNote(classId) {
+      return request.resource.data.keys().hasOnly([
+               'classId', 'title', 'content', 'url', 'sections', 'createdBy', 'createdAt', 'updatedAt'
+             ])
+             && request.resource.data.classId == classId
+             && request.resource.data.title is string
+             && request.resource.data.title.size() > 0
+             && request.resource.data.title.size() <= 120
+             && request.resource.data.content is string
+             && request.resource.data.content.size() <= 5000
+             && request.resource.data.url is string
+             && request.resource.data.url.size() <= 1000
+             && (!('sections' in request.resource.data)
+                 || validBookHelpSections(request.resource.data))
+             && request.resource.data.createdBy == uid()
+             && request.resource.data.createdAt == request.time
+             && request.resource.data.updatedAt == request.time;
+    }
+    function validBookHelpNoteUpdate() {
+      return request.resource.data.keys().hasOnly([
+               'classId', 'title', 'content', 'url', 'sections', 'createdBy', 'createdAt', 'updatedAt', 'order'
+             ])
+             && (!('order' in request.resource.data)
+                 || (request.resource.data.order is int && request.resource.data.order >= 0))
+             && request.resource.data.classId == resource.data.classId
+             && request.resource.data.createdBy == resource.data.createdBy
+             && request.resource.data.createdAt == resource.data.createdAt
+             && request.resource.data.title is string
+             && request.resource.data.title.size() > 0
+             && request.resource.data.title.size() <= 120
+             && request.resource.data.content is string
+             && request.resource.data.content.size() <= 5000
+             && request.resource.data.url is string
+             && request.resource.data.url.size() <= 1000
+             && (!('sections' in request.resource.data)
+                 || validBookHelpSections(request.resource.data))
+             && request.resource.data.updatedAt == request.time;
+    }
+    function validBookHelpSectionAt(sections, index) {
+      return sections.size() <= index || (
+        sections[index] is map
+        && sections[index].keys().hasOnly(['id', 'title', 'content', 'url'])
+        && sections[index].id is string
+        && sections[index].id.size() > 0
+        && sections[index].id.size() <= 100
+        && sections[index].title is string
+        && sections[index].title.size() > 0
+        && sections[index].title.size() <= 120
+        && sections[index].content is string
+        && sections[index].content.size() <= 5000
+        && sections[index].url is string
+        && sections[index].url.size() <= 1000
+      );
+    }
+    function validBookHelpSections(data) {
+      let sections = data.get('sections', []);
+      return sections is list
+             && sections.size() <= 20
+             && validBookHelpSectionAt(sections, 0)
+             && validBookHelpSectionAt(sections, 1)
+             && validBookHelpSectionAt(sections, 2)
+             && validBookHelpSectionAt(sections, 3)
+             && validBookHelpSectionAt(sections, 4)
+             && validBookHelpSectionAt(sections, 5)
+             && validBookHelpSectionAt(sections, 6)
+             && validBookHelpSectionAt(sections, 7)
+             && validBookHelpSectionAt(sections, 8)
+             && validBookHelpSectionAt(sections, 9)
+             && validBookHelpSectionAt(sections, 10)
+             && validBookHelpSectionAt(sections, 11)
+             && validBookHelpSectionAt(sections, 12)
+             && validBookHelpSectionAt(sections, 13)
+             && validBookHelpSectionAt(sections, 14)
+             && validBookHelpSectionAt(sections, 15)
+             && validBookHelpSectionAt(sections, 16)
+             && validBookHelpSectionAt(sections, 17)
+             && validBookHelpSectionAt(sections, 18)
+             && validBookHelpSectionAt(sections, 19);
+    }
+    function validBookImageAt(images, index) {
+      return images.size() <= index || (
+        images[index] is string
+        && images[index].size() <= 600000
+        && (images[index].matches('https://[^ ]+')
+            || images[index].matches('data:image/jpeg;base64,[A-Za-z0-9+/]+={0,2}'))
+      );
+    }
+    function bookImageSizeAt(images, index) {
+      return images.size() <= index ? 0 : images[index].size();
+    }
+    function validBookImages(data) {
+      let images = data.get('images', []);
+      let sizes = data.get('imageSizes', []);
+      return images is list && images.size() <= 8
+             && (!('imageSizes' in data)
+                 || (sizes is list && sizes.size() == images.size()
+                     && sizes.hasOnly(['large', 'medium', 'small'])))
+             && validBookImageAt(images, 0)
+             && validBookImageAt(images, 1)
+             && validBookImageAt(images, 2)
+             && validBookImageAt(images, 3)
+             && validBookImageAt(images, 4)
+             && validBookImageAt(images, 5)
+             && validBookImageAt(images, 6)
+             && validBookImageAt(images, 7)
+             && (bookImageSizeAt(images, 0) + bookImageSizeAt(images, 1)
+                 + bookImageSizeAt(images, 2) + bookImageSizeAt(images, 3)
+                 + bookImageSizeAt(images, 4) + bookImageSizeAt(images, 5)
+                 + bookImageSizeAt(images, 6) + bookImageSizeAt(images, 7)) <= 600000;
+    }
+    function validBookResource(resourceId) {
+      return request.resource.data.keys().hasOnly([
+               'resourceId', 'classId', 'projectId', 'projectVersion',
+               'stepId', 'stepOrder', 'resourceOrder',
+               'title', 'content', 'url', 'images', 'imageSizes', 'locked', 'createdBy', 'createdAt', 'updatedAt'
+             ])
+             && validBookImages(request.resource.data)
+             && request.resource.data.resourceId == resourceId
+             && request.resource.data.classId is string
+             && request.resource.data.classId.size() > 0
+             && request.resource.data.projectId == request.resource.data.classId
+             && request.resource.data.projectVersion is string
+             && request.resource.data.projectVersion.size() > 0
+             && request.resource.data.stepId is string
+             && request.resource.data.stepId.size() <= 120
+             && request.resource.data.stepOrder is int
+             && request.resource.data.resourceOrder is int
+             && request.resource.data.title is string
+             && request.resource.data.title.size() > 0
+             && request.resource.data.title.size() <= 120
+             && request.resource.data.content is string
+             && request.resource.data.content.size() <= 5000
+             && request.resource.data.url is string
+             && request.resource.data.url.size() <= 1000
+             && request.resource.data.locked is bool
+             && request.resource.data.createdBy == uid()
+             && request.resource.data.createdAt == request.time
+             && request.resource.data.updatedAt == request.time;
+    }
+    function validBookConfirmation() {
+      return request.resource.data.keys().hasOnly([
+               'classId', 'projectId', 'itemKind', 'itemId', 'itemTitle',
+               'stepId', 'authorId', 'authorName', 'confirmed',
+               'checklistValues', 'checklistVersion', 'createdAt', 'updatedAt'
+             ])
+             && request.resource.data.classId is string
+             && request.resource.data.classId.size() > 0
+             && request.resource.data.projectId is string
+             && request.resource.data.projectId.size() > 0
+             && request.resource.data.itemKind in ['activity', 'resource']
+             && request.resource.data.itemId is string
+             && request.resource.data.itemId.size() > 0
+             && request.resource.data.itemTitle is string
+             && request.resource.data.itemTitle.size() <= 120
+             && request.resource.data.stepId is string
+             && request.resource.data.stepId.size() <= 120
+             && request.resource.data.authorId == uid()
+             && request.resource.data.authorName is string
+             && request.resource.data.authorName.size() > 0
+             && request.resource.data.authorName.size() <= 80
+             && request.resource.data.confirmed is bool
+             && (!('checklistValues' in request.resource.data)
+                 || (request.resource.data.checklistValues is list
+                     && request.resource.data.checklistValues.size() <= 500
+                     && request.resource.data.checklistValues.hasOnly([true, false])
+                     && (request.resource.data.confirmed == false
+                         || request.resource.data.checklistValues.hasOnly([true]))))
+             && (!('checklistVersion' in request.resource.data)
+                 || (request.resource.data.checklistVersion is string
+                     && request.resource.data.checklistVersion.size() <= 100))
+             && request.resource.data.createdAt == request.time
+             && request.resource.data.updatedAt == request.time;
+    }
+    function validBookConfirmationId(confirmationId) {
+      return confirmationId == request.resource.data.classId + '|' +
+             request.resource.data.projectId + '|' +
+             request.resource.data.itemKind + '|' +
+             request.resource.data.itemId + '|' +
+             request.resource.data.authorId;
+    }
+    function keepsBookConfirmationOwner() {
+      return resource.data.authorId == uid()
+             && resource.data.classId == request.resource.data.classId
+             && resource.data.projectId == request.resource.data.projectId
+             && resource.data.itemKind == request.resource.data.itemKind
+             && resource.data.itemId == request.resource.data.itemId;
+    }
+    function canConfirmBookItem() {
+      return (
+               request.resource.data.itemKind == 'resource'
+               && exists(/databases/$(database)/documents/bookProjects/$(request.resource.data.projectId))
+               && get(/databases/$(database)/documents/bookProjects/$(request.resource.data.projectId)).data.classId == request.resource.data.classId
+               && (
+                    (
+                      get(/databases/$(database)/documents/bookProjects/$(request.resource.data.projectId)).data.keys().hasAny(['confirmableItemKeys'])
+                      && get(/databases/$(database)/documents/bookProjects/$(request.resource.data.projectId)).data.confirmableItemKeys.hasAny(['resource:' + request.resource.data.itemId])
+                      && exists(/databases/$(database)/documents/bookResources/$(request.resource.data.itemId))
+                      && get(/databases/$(database)/documents/bookResources/$(request.resource.data.itemId)).data.classId == request.resource.data.classId
+                      && get(/databases/$(database)/documents/bookResources/$(request.resource.data.itemId)).data.projectId == request.resource.data.projectId
+                      && get(/databases/$(database)/documents/bookResources/$(request.resource.data.itemId)).data.get('locked', false) != true
+                    )
+                    || (
+                      !get(/databases/$(database)/documents/bookProjects/$(request.resource.data.projectId)).data.keys().hasAny(['confirmableItemKeys'])
+                      && request.resource.data.projectId == request.resource.data.classId
+                      && (
+                           !exists(/databases/$(database)/documents/bookResources/$(request.resource.data.itemId))
+                           || (
+                                get(/databases/$(database)/documents/bookResources/$(request.resource.data.itemId)).data.classId == request.resource.data.classId
+                                && get(/databases/$(database)/documents/bookResources/$(request.resource.data.itemId)).data.projectId == request.resource.data.projectId
+                                && get(/databases/$(database)/documents/bookResources/$(request.resource.data.itemId)).data.get('locked', false) != true
+                              )
+                         )
+                    )
+                  )
+             )
+             || (
+               request.resource.data.itemKind == 'activity'
+               &&
+               exists(/databases/$(database)/documents/bookActivities/$(request.resource.data.itemId))
+               && get(/databases/$(database)/documents/bookActivities/$(request.resource.data.itemId)).data.classId == request.resource.data.classId
+               && get(/databases/$(database)/documents/bookActivities/$(request.resource.data.itemId)).data.projectId == request.resource.data.projectId
+               && get(/databases/$(database)/documents/bookActivities/$(request.resource.data.itemId)).data.get('locked', false) != true
+             );
+    }
+
+    match /bookProjects/{classId} {
+      allow read: if signedIn() && (
+        isAdmin() || ownsClass(classId) || isClassMember(classId)
+      );
+      allow create, update: if (isAdmin() || ownsClassEditable(classId))
+                            && validBookProject(classId);
+      allow delete: if isAdmin() || ownsClassEditable(classId);
+    }
+
+    match /bookResources/{resourceId} {
+      allow read: if signedIn() && (
+        isAdmin()
+        || ownsClass(resource.data.classId)
+        || isClassMember(resource.data.classId)
+      );
+      allow create: if (isAdmin() || ownsClassEditable(request.resource.data.classId))
+                    && validBookResource(resourceId);
+      allow update: if (isAdmin() || ownsClassEditable(resource.data.classId))
+                    && request.resource.data.classId == resource.data.classId
+                    && request.resource.data.projectId == resource.data.projectId
+                    && validBookResource(resourceId);
+      allow delete: if isAdmin() || ownsClassEditable(resource.data.classId);
+    }
+
+    match /bookHelpNotes/{noteId} {
+      allow read: if signedIn() && (
+        isAdmin()
+        || ownsClass(resource.data.classId)
+        || isClassMember(resource.data.classId)
+      );
+      allow create: if (isAdmin() || ownsClassEditable(request.resource.data.classId))
+                    && validBookHelpNote(request.resource.data.classId);
+      allow update: if (isAdmin() || ownsClassEditable(resource.data.classId))
+                    && validBookHelpNoteUpdate();
+      allow delete: if isAdmin() || ownsClassEditable(resource.data.classId);
+    }
+
+    match /bookActivities/{aId} {
+      allow read: if signedIn() && (
+        isAdmin()
+        || ownsClass(resource.data.classId)
+        || isClassMember(resource.data.classId)
+      );
+      allow create: if (isAdmin()
+                    || (isTeacher() && ownsClassEditable(request.resource.data.classId)))
+                    && validBookImages(request.resource.data);
+      allow update: if (isAdmin() || ownsClassEditable(resource.data.classId))
+                    && validBookImages(request.resource.data);
+      allow delete: if isAdmin() || ownsClassEditable(resource.data.classId);
+
+      match /entries/{sId} {
+        allow read: if signedIn() && (
+          isAdmin() || ownsBookActivity(aId) || (sId == uid() && isBookActivityMember(aId))
+        );
+        allow create, update: if signedIn()
+                      && sId == uid()
+                      && request.resource.data.authorId == uid()
+                      && isBookActivityMember(aId)
+                      && !isBookActivityLocked(aId);
+        allow delete: if isAdmin() || ownsBookActivityEditable(aId);
+      }
+
+      match /groups/{gId} {
+        allow read: if isAdmin() || ownsBookActivity(aId);
+        allow delete: if isAdmin() || ownsBookActivityEditable(aId);
+
+        match /words/{wordId} {
+          allow read: if isAdmin() || ownsBookActivity(aId);
+          allow delete: if isAdmin() || ownsBookActivityEditable(aId);
+        }
+      }
+    }
+
+    match /bookConfirmations/{confirmationId} {
+      allow read: if signedIn() && (
+        isAdmin()
+        || classOwnerUid(resource.data.classId) == uid()
+        || (resource.data.authorId == uid()
+            && isClassMember(resource.data.classId))
+      );
+      allow create: if signedIn()
+                    && validBookConfirmation()
+                    && validBookConfirmationId(confirmationId)
+                    && isClassMember(request.resource.data.classId)
+                    && canConfirmBookItem();
+      allow update: if signedIn()
+                    && validBookConfirmation()
+                    && validBookConfirmationId(confirmationId)
+                    && keepsBookConfirmationOwner()
+                    && isClassMember(request.resource.data.classId)
+                    && canConfirmBookItem();
+      allow delete: if isAdmin() || ownsClassEditable(resource.data.classId);
+    }
+
+    // ── 컬렉션 그룹 쿼리 규칙 ─────────────────────────────────
+    // collectionGroup() 쿼리는 {path=**} 그룹 규칙이 없으면 무조건 거부됨.
+    // · answers: 질문 게시판은 전체 공유라 로그인 사용자 읽기(경로 규칙과 동일 노출)
+    // Cards and entries are admin-only here; direct rules check the real parent class.
+    match /{path=**}/answers/{aId} {
+      allow read: if signedIn();
+    }
+    match /{path=**}/cards/{cardId} {
+      allow read: if isAdmin();
+    }
+    match /{path=**}/entries/{entryId} {
+      allow read: if isAdmin();
+    }
+    match /{path=**}/attendanceRecords/{recordId} {
+      allow read: if isAdmin();
+    }
+    match /{path=**}/questionSignals/{signalId} {
+      allow read: if isAdmin();
+    }
+  }
+}

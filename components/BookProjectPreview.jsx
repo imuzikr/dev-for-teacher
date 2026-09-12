@@ -1,0 +1,187 @@
+"use client";
+
+import { useState } from "react";
+import { stripHtml } from "@/lib/html";
+import RichTextDisplay from "./RichTextDisplay";
+import { BookItemImageIndicator } from "./BookItemImages";
+import { IconLock, IconTrash, IconUnlock } from "./StatusIcons";
+
+export function IconEdit({ size = 16 }) {
+  return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4.5 19.5h4l10-10a2.12 2.12 0 0 0-3-3l-10 10-1 3Z" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"/><path d="m14 8 3 3" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round"/></svg>;
+}
+
+export function IconCopy({ size = 16 }) {
+  return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="8" y="8" width="11" height="11" rx="2" stroke="currentColor" strokeWidth="1.7"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round"/></svg>;
+}
+
+export function resourceHref(url) {
+  const trimmed = String(url ?? "").trim();
+  if (!trimmed) return "";
+  const candidate = /^[a-z][a-z\d+.-]*:/i.test(trimmed) ? trimmed : `https://${trimmed}`;
+
+  try {
+    const parsed = new URL(candidate);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return "";
+    return parsed.href;
+  } catch {
+    return "";
+  }
+}
+
+export function resourceLinkLabel(url) {
+  const href = resourceHref(url);
+  if (!href) return "";
+
+  try {
+    const parsed = new URL(href);
+    const host = parsed.hostname.replace(/^www\./, "");
+    const path = parsed.pathname.replace(/\/$/, "");
+    return `${host}${path && path !== "/" ? path : ""}`;
+  } catch {
+    return href;
+  }
+}
+
+function orderKey(kind, id) {
+  return `${kind}:${id}`;
+}
+
+export function orderedStepItems(step) {
+  const baseItems = [
+    ...(step.activities ?? []).map((item) => ({
+      id: item.id,
+      kind: "activity",
+      label: "활동",
+      title: item.title,
+      content: item.content || "등록된 활동 안내사항이 없습니다.",
+      url: item.bookUrl || item.url || "",
+      source: item,
+    })),
+    ...(step.resources ?? []).map((item) => ({
+      id: item.id,
+      kind: "resource",
+      label: "자료",
+      title: item.title,
+      content: item.content || "등록된 내용이 없습니다.",
+      url: item.url || "",
+      source: item,
+    })),
+  ];
+
+  const byKey = new Map(baseItems.map((item) => [orderKey(item.kind, item.id), item]));
+  const seen = new Set();
+  const ordered = (step.itemOrder ?? [])
+    .map((entry) => {
+      const kind = entry?.kind === "resource" ? "resource" : entry?.kind === "activity" ? "activity" : "";
+      const id = entry?.id;
+      if (!kind || !id) return null;
+      const key = orderKey(kind, id);
+      const item = byKey.get(key);
+      if (!item || seen.has(key)) return null;
+      seen.add(key);
+      return item;
+    })
+    .filter(Boolean);
+
+  return [...ordered, ...baseItems.filter((item) => !seen.has(orderKey(item.kind, item.id)))];
+}
+
+export function stepPreviewItems(step) {
+  return orderedStepItems(step);
+}
+
+export function ProjectDisplayItem({ item, kind, onEdit, onDelete, onToggleLock, dragProps = null, dragging = false }) {
+  const [copied, setCopied] = useState(false);
+  const content = item.content || "";
+  const linkSource = kind === "activity" ? item.bookUrl || item.url : item.url;
+  const linkHref = resourceHref(linkSource);
+  const linkLabel = resourceLinkLabel(linkSource);
+  const itemLabel = kind === "activity" ? "활동" : "자료";
+  const locked = item.locked === true;
+  const compactResource = kind === "resource";
+
+  async function copyResource() {
+    const text = [item.title, stripHtml(item.content || ""), linkSource].filter(Boolean).join("\n");
+    await navigator.clipboard.writeText(text);
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1600);
+  }
+
+  return (
+    <article
+      className={`book-project-detail-item book-project-detail-item--${kind}${dragging ? " is-dragging" : ""}${dragProps ? " is-draggable" : ""}`}
+      onDragOver={dragProps?.onDragOver}
+      onDrop={dragProps?.onDrop}
+    >
+      {dragProps && (
+        <span
+          className="book-step-drag-handle"
+          role="button"
+          tabIndex={0}
+          aria-label={`${itemLabel} 순서 이동`}
+          draggable
+          onDragStart={dragProps.onDragStart}
+          onDragEnd={dragProps.onDragEnd}
+        />
+      )}
+      <div className="book-project-detail-copy">
+        {(onToggleLock || locked) && (
+          <div className="book-project-detail-lock-actions" aria-label={`${itemLabel} 잠금`}>
+            {onToggleLock ? (
+              <button
+                type="button"
+                className="btn-ghost book-project-icon-action"
+                title={locked ? `${itemLabel} 잠금 해제` : `${itemLabel} 잠그기`}
+                aria-label={locked ? `${itemLabel} 잠금 해제` : `${itemLabel} 잠그기`}
+                onClick={() => onToggleLock(!locked)}
+              >
+                {locked ? <IconUnlock size={12} /> : <IconLock size={12} />}
+              </button>
+            ) : (
+              <em className="book-project-lock-state"><IconLock size={12} /></em>
+            )}
+          </div>
+        )}
+        <div className="book-project-detail-headline">
+          <span className="book-project-detail-kind">{itemLabel}</span>
+          <strong>{item.title}</strong>
+          <div className="book-project-detail-actions" aria-label={`${itemLabel} 명령`}>
+            {kind === "resource" && (
+              <button type="button" className="btn-ghost book-project-icon-action book-project-copy-action" title="자료 복사" aria-label={copied ? "자료를 복사했습니다" : "자료 복사"} onClick={copyResource}>
+                <IconCopy />
+              </button>
+            )}
+            <BookItemImageIndicator images={item.images} />
+            {onEdit && (
+              <button type="button" className="btn-ghost book-project-icon-action" title={`${itemLabel} 수정`} aria-label={`${itemLabel} 수정`} onClick={onEdit}>
+                <IconEdit />
+              </button>
+            )}
+            {onDelete && (
+              <button type="button" className="btn-ghost role-danger-btn book-project-icon-action" title={`${itemLabel} 삭제`} aria-label={`${itemLabel} 삭제`} onClick={onDelete}>
+                <IconTrash size={14} />
+              </button>
+            )}
+          </div>
+        </div>
+        {!compactResource && content && <RichTextDisplay className="book-project-detail-text" html={content} />}
+        {linkHref && (
+          <a className="book-project-resource-link" href={linkHref} target="_blank" rel="noreferrer">
+            <span>링크</span>
+            <strong>{linkLabel}</strong>
+          </a>
+        )}
+      </div>
+    </article>
+  );
+}
+
+export function ProjectSection({ title, empty, children }) {
+  const items = Array.isArray(children) ? children : children ? [children] : [];
+  return (
+    <section className="book-project-section">
+      <h3>{title}</h3>
+      {items.length > 0 ? children : <p>{empty}</p>}
+    </section>
+  );
+}

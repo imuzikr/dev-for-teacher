@@ -1,0 +1,509 @@
+"use client";
+
+import { useEffect, useRef, useState } from "react";
+import { escapeHtml, sanitizeHtml } from "@/lib/html";
+import "./ActivityChecklist.css";
+import "./RichTextCode.css";
+
+const SIZE_CLASSES = {
+  small: "rte-size-small",
+  normal: "rte-size-normal",
+  large: "rte-size-large",
+};
+
+function IconListBulleted() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <circle cx="5" cy="6" r="1.7" fill="currentColor" />
+      <circle cx="5" cy="12" r="1.7" fill="currentColor" />
+      <circle cx="5" cy="18" r="1.7" fill="currentColor" />
+      <path d="M10 6h9M10 12h9M10 18h9" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function IconListNumbered() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="M4 5h2v5M4 10h4M4 14h4M4 19h4M11 6h8M11 12h8M11 18h8" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+      <text x="3.5" y="17" fill="currentColor" fontSize="7" fontWeight="800">
+        2
+      </text>
+    </svg>
+  );
+}
+
+function IconChecklist() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="M3.5 5.2c0-.7.5-1.2 1.2-1.2h2.6c.7 0 1.2.5 1.2 1.2v2.6c0 .7-.5 1.2-1.2 1.2H4.7c-.7 0-1.2-.5-1.2-1.2V5.2ZM3.5 16.2c0-.7.5-1.2 1.2-1.2h2.6c.7 0 1.2.5 1.2 1.2v2.6c0 .7-.5 1.2-1.2 1.2H4.7c-.7 0-1.2-.5-1.2-1.2v-2.6Z" stroke="currentColor" strokeWidth="2" />
+      <path d="M5 6.4l1.1 1.1L9 4.6M12 6.5h8M12 17.5h8" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function normalizeEditorHtml(root) {
+  if (!root) return;
+  root.querySelectorAll("font[size]").forEach((font) => {
+    const size = font.getAttribute("size");
+    const span = document.createElement("span");
+    span.className = size === "2" ? SIZE_CLASSES.small : size === "5" ? SIZE_CLASSES.large : SIZE_CLASSES.normal;
+    span.innerHTML = font.innerHTML;
+    font.replaceWith(span);
+  });
+}
+
+function removeEmptySizeClasses(root) {
+  root?.querySelectorAll("span").forEach((span) => {
+    const sizeClass = Object.values(SIZE_CLASSES).find((className) => span.classList.contains(className));
+    Object.values(SIZE_CLASSES).forEach((className) => span.classList.remove(className));
+    if (sizeClass) span.classList.add(sizeClass);
+    if (span.classList.length === 0) span.replaceWith(...span.childNodes);
+  });
+}
+
+function closestElement(node, selector, boundary) {
+  let current = node?.nodeType === Node.ELEMENT_NODE ? node : node?.parentElement;
+  while (current && current !== boundary) {
+    if (current.matches(selector)) return current;
+    current = current.parentElement;
+  }
+  return null;
+}
+
+function moveCaretToEnd(node) {
+  const selection = window.getSelection();
+  if (!selection) return;
+  const range = document.createRange();
+  range.selectNodeContents(node);
+  range.collapse(false);
+  selection.removeAllRanges();
+  selection.addRange(range);
+}
+
+function checklistItemHtml(text = "확인할 일") {
+  const safeText = text.replace(/[&<>]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[char]));
+  return `<ul class="rte-checklist"><li><label><input type="checkbox"> <span class="rte-checklist-text">${safeText}</span></label></li></ul>`;
+}
+
+function checklistLabel(checked = false, nodes = [document.createElement("br")]) {
+  const input = document.createElement("input");
+  const label = document.createElement("label");
+  const text = document.createElement("span");
+  input.type = "checkbox";
+  input.checked = checked;
+  text.className = "rte-checklist-text";
+  text.replaceChildren(...nodes);
+  label.replaceChildren(input, document.createTextNode(" "), text);
+  return label;
+}
+
+function setChecklistItem(item) {
+  const existingInput = item.querySelector('input[type="checkbox"]');
+  const existingText = item.querySelector(".rte-checklist-text");
+  const nodes = [...item.childNodes].flatMap((node) => {
+    if (node === existingInput) return [];
+    if (node === existingText) return [...existingText.childNodes];
+    if (node.nodeType === Node.ELEMENT_NODE && node.tagName === "LABEL") {
+      const text = node.querySelector(".rte-checklist-text");
+      return text ? [...text.childNodes] : [...node.childNodes].filter((child) => child !== existingInput);
+    }
+    return [node];
+  });
+  item.replaceChildren(checklistLabel(Boolean(existingInput?.checked || existingInput?.hasAttribute("checked")), nodes));
+}
+
+function unsetChecklistItem(item) {
+  item.querySelectorAll('input[type="checkbox"]').forEach((input) => input.remove());
+  item.querySelectorAll("label").forEach((label) => label.replaceWith(...label.childNodes));
+}
+
+function removeSizeClasses(root) {
+  if (!root) return;
+  root.querySelectorAll("*").forEach((el) => {
+    Object.values(SIZE_CLASSES).forEach((className) => el.classList.remove(className));
+  });
+}
+
+function detectWholeTextSize(html = "") {
+  const found = Object.entries(SIZE_CLASSES).find(([, className]) => html.includes(className));
+  return found?.[0] ?? "normal";
+}
+
+function syncChecklistCheckboxAttrs(root) {
+  root.querySelectorAll('input[type="checkbox"]').forEach((input) => {
+    if (input.checked) {
+      input.setAttribute("checked", "");
+    } else {
+      input.removeAttribute("checked");
+    }
+  });
+}
+
+function checklistItemText(item) {
+  const clone = item.cloneNode(true);
+  clone.querySelectorAll('input[type="checkbox"]').forEach((input) => input.remove());
+  return clone.textContent.replace(/\u00a0/g, " ").trim();
+}
+
+function moveCaretInsideText(node) {
+  const selection = window.getSelection();
+  if (!selection) return;
+  const text = node.firstChild || node.appendChild(document.createTextNode(""));
+  const range = document.createRange();
+  range.setStart(text, text.textContent.length);
+  range.collapse(true);
+  selection.removeAllRanges();
+  selection.addRange(range);
+}
+
+export default function BasicFormatEditor({
+  value = "",
+  onChange,
+  placeholder = "",
+  disabled = false,
+  templateEnabled = false,
+  ariaLabel = "서식 입력",
+}) {
+  const areaRef = useRef(null);
+  const lastHtmlRef = useRef("");
+  const activeCodeRef = useRef(null);
+  const [inCodeBlock, setInCodeBlock] = useState(false);
+  const [activeSize, setActiveSize] = useState(() => detectWholeTextSize(value));
+
+  useEffect(() => {
+    function updateCodeSelection() {
+      const area = areaRef.current;
+      const pre = area ? closestElement(window.getSelection()?.anchorNode, "pre", area) : null;
+      activeCodeRef.current = pre && area.contains(pre) ? pre : null;
+      setInCodeBlock(Boolean(activeCodeRef.current));
+    }
+    document.addEventListener("selectionchange", updateCodeSelection);
+    return () => document.removeEventListener("selectionchange", updateCodeSelection);
+  }, []);
+
+  useEffect(() => {
+    const nextHtml = sanitizeHtml(value || "");
+    const area = areaRef.current;
+    if (!area || nextHtml === lastHtmlRef.current || area.innerHTML === nextHtml) return;
+    area.innerHTML = nextHtml;
+    lastHtmlRef.current = nextHtml;
+    setActiveSize(detectWholeTextSize(nextHtml));
+  }, [value]);
+
+  function emitChange() {
+    const area = areaRef.current;
+    if (!area) return;
+    syncChecklistCheckboxAttrs(area);
+    const snapshot = area.cloneNode(true);
+    normalizeEditorHtml(snapshot);
+    removeEmptySizeClasses(snapshot);
+    const nextHtml = sanitizeHtml(snapshot.innerHTML);
+    lastHtmlRef.current = nextHtml;
+    setActiveSize(detectWholeTextSize(nextHtml));
+    onChange?.(nextHtml);
+  }
+
+  function runCommand(command) {
+    if (disabled) return;
+    areaRef.current?.focus();
+    document.execCommand(command, false, null);
+    emitChange();
+  }
+
+  function toggleChecklist() {
+    const area = areaRef.current;
+    const selection = window.getSelection();
+    if (!area || !selection || disabled) return;
+    area.focus();
+
+    const range = selection.rangeCount ? selection.getRangeAt(0) : null;
+    const selectedInEditor = range && area.contains(range.commonAncestorContainer);
+    if (!selectedInEditor) {
+      const nextRange = document.createRange();
+      nextRange.selectNodeContents(area);
+      nextRange.collapse(false);
+      selection.removeAllRanges();
+      selection.addRange(nextRange);
+    }
+
+    const anchor = selection.anchorNode;
+    const list = closestElement(anchor, "ul, ol", area);
+    if (list?.classList.contains("rte-checklist")) {
+      list.classList.remove("rte-checklist");
+      list.querySelectorAll("li").forEach(unsetChecklistItem);
+      emitChange();
+      return;
+    }
+
+    const item = closestElement(anchor, "li", area);
+    if (item && list) {
+      if (list.tagName === "OL") {
+        const replacement = document.createElement("ul");
+        replacement.innerHTML = list.innerHTML;
+        list.replaceWith(replacement);
+        replacement.className = "rte-checklist";
+        replacement.querySelectorAll("li").forEach(setChecklistItem);
+      } else {
+        list.classList.add("rte-checklist");
+        list.querySelectorAll("li").forEach(setChecklistItem);
+      }
+      emitChange();
+      return;
+    }
+
+    const selectedText = selection.toString().trim();
+    document.execCommand("insertHTML", false, checklistItemHtml(selectedText || "확인할 일"));
+    const insertedList = closestElement(selection.anchorNode, "ul.rte-checklist", area);
+    if (insertedList) moveCaretInsideText(insertedList.querySelector(".rte-checklist-text"));
+    emitChange();
+  }
+
+  function handleAreaClick(event) {
+    if (disabled) {
+      event.preventDefault();
+      return;
+    }
+    if (event.target instanceof HTMLInputElement && event.target.type === "checkbox") {
+      emitChange();
+      return;
+    }
+    if (event.target instanceof Element && event.target.closest(".rte-checklist label")) {
+      event.preventDefault();
+    }
+  }
+
+  function exitCodeBlock(pre = activeCodeRef.current) {
+    const area = areaRef.current;
+    if (disabled || !pre || !area?.contains(pre)) return;
+    const paragraph = document.createElement("div");
+    paragraph.append(document.createElement("br"));
+    let exitAfter = pre;
+    for (let parent = pre.parentElement; parent && parent !== area; parent = parent.parentElement) {
+      if (parent.matches("ul, ol")) exitAfter = parent;
+    }
+    exitAfter.after(paragraph);
+    area.focus();
+    moveCaretToEnd(paragraph);
+    activeCodeRef.current = null;
+    setInCodeBlock(false);
+    paragraph.scrollIntoView({ block: "nearest" });
+    emitChange();
+  }
+
+  function handleKeyDown(event) {
+    if (event.nativeEvent.isComposing || event.keyCode === 229 || disabled) return;
+    const area = areaRef.current;
+    const selection = window.getSelection();
+    const pre = area && selection ? closestElement(selection.anchorNode, "pre", area) : null;
+    if (event.key === " " && !event.ctrlKey && !event.metaKey && !event.altKey
+      && area && selection?.rangeCount && selection.isCollapsed && area.contains(selection.anchorNode)
+      && !closestElement(selection.anchorNode, "pre, code, li", area)) {
+      const caret = selection.getRangeAt(0);
+      const block = closestElement(caret.startContainer, "p, div, h1, h2, h3, h4, h5, h6, blockquote", area) || area;
+      const prefix = caret.cloneRange();
+      prefix.selectNodeContents(block);
+      prefix.setEnd(caret.startContainer, caret.startOffset);
+      let lineBreak = null;
+      for (const boundary of block.querySelectorAll("br, p, div, h1, h2, h3, h4, h5, h6, blockquote")) {
+        const parent = boundary.parentNode;
+        const offset = Array.prototype.indexOf.call(parent.childNodes, boundary) + 1;
+        if (prefix.comparePoint(parent, offset) === 0) {
+          prefix.setStartAfter(boundary);
+          lineBreak = boundary.tagName === "BR" ? boundary : null;
+        }
+      }
+      let textBreak = null;
+      const walker = document.createTreeWalker(block, NodeFilter.SHOW_TEXT);
+      while (walker.nextNode()) {
+        const node = walker.currentNode;
+        const limit = node === caret.startContainer ? caret.startOffset : node.length;
+        const index = node.textContent.lastIndexOf("\n", limit - 1);
+        if (index >= 0 && prefix.comparePoint(node, index + 1) === 0) {
+          prefix.setStart(node, index + 1);
+          textBreak = { node, index };
+          lineBreak = null;
+        }
+      }
+      const contents = prefix.cloneContents();
+      if (contents.textContent === "-" && !contents.querySelector("img, input, hr")) {
+        event.preventDefault();
+        if (lineBreak) prefix.setStartBefore(lineBreak);
+        if (textBreak) prefix.setStart(textBreak.node, textBreak.index);
+        selection.removeAllRanges();
+        selection.addRange(prefix);
+        document.execCommand("delete", false);
+        if (lineBreak || textBreak) document.execCommand("insertParagraph", false);
+        document.execCommand("insertUnorderedList", false);
+        emitChange();
+        return;
+      }
+    }
+    if (pre && event.key === "Enter") {
+      event.preventDefault();
+      if (event.ctrlKey || event.metaKey) {
+        exitCodeBlock(pre);
+        return;
+      } else document.execCommand("insertLineBreak", false);
+      emitChange();
+      return;
+    }
+    if (event.key !== "Enter") return;
+    const item = area && selection ? closestElement(selection.anchorNode, "li", area) : null;
+    const list = item?.parentElement;
+    if (!item || !list?.classList.contains("rte-checklist")) return;
+
+    if (event.shiftKey) return;
+    event.preventDefault();
+    if (!checklistItemText(item)) {
+      const exit = document.createElement("div");
+      exit.innerHTML = "<br>";
+      const remaining = list.cloneNode(false);
+      while (item.nextSibling) remaining.append(item.nextSibling);
+      list.after(exit);
+      if (remaining.childNodes.length) exit.after(remaining);
+      item.remove();
+      if (!list.querySelector("li")) list.remove();
+      moveCaretToEnd(exit);
+      emitChange();
+      return;
+    }
+
+    const range = selection.getRangeAt(0);
+    const text = item.querySelector(".rte-checklist-text");
+    if (!text || !text.contains(range.startContainer) || !text.contains(range.endContainer)) return;
+    range.deleteContents();
+    const tail = range.cloneRange();
+    tail.setEnd(text, text.childNodes.length);
+    const remainder = tail.extractContents();
+    if (!text.textContent && !text.querySelector("br")) text.append(document.createElement("br"));
+    if (!remainder.textContent && !remainder.querySelector("br")) remainder.append(document.createElement("br"));
+    const nextItem = document.createElement("li");
+    const label = checklistLabel(false, [...remainder.childNodes]);
+    nextItem.append(label);
+    item.after(nextItem);
+    const nextRange = document.createRange();
+    nextRange.selectNodeContents(label.querySelector(".rte-checklist-text"));
+    nextRange.collapse(true);
+    selection.removeAllRanges();
+    selection.addRange(nextRange);
+    emitChange();
+  }
+
+  function applySize(size) {
+    if (disabled) return;
+    const area = areaRef.current;
+    if (!area) return;
+    area.focus();
+    normalizeEditorHtml(area);
+    removeSizeClasses(area);
+    const className = SIZE_CLASSES[size] ?? SIZE_CLASSES.normal;
+    const html = area.innerHTML.trim() ? area.innerHTML : "<br>";
+    area.innerHTML = `<div class="${className}">${html}</div>`;
+    setActiveSize(size);
+    emitChange();
+  }
+
+  function insertTemplateVariable() {
+    const area = areaRef.current;
+    const selection = window.getSelection();
+    if (!area || !selection || disabled) return;
+    const selected = selection.rangeCount && area.contains(selection.getRangeAt(0).commonAncestorContainer);
+    const label = selected ? selection.toString().replace(/^\{\{|\}\}$/g, "").trim() : "";
+    if (!selected) {
+      const range = document.createRange();
+      range.selectNodeContents(area);
+      range.collapse(false);
+      selection.removeAllRanges();
+      selection.addRange(range);
+    }
+    area.focus();
+    const name = label && !/[{}\r\n]/.test(label) && label.length <= 80 ? label : "입력값";
+    document.execCommand("insertText", false, `{{${name}}}`);
+    emitChange();
+  }
+
+  function insertCodeBlock() {
+    const area = areaRef.current;
+    const selection = window.getSelection();
+    if (!area || !selection || disabled) return;
+    area.focus();
+    if (!selection.rangeCount || !area.contains(selection.getRangeAt(0).commonAncestorContainer)) moveCaretToEnd(area);
+    const existing = closestElement(selection.anchorNode, "pre", area);
+    if (existing) {
+      exitCodeBlock(existing);
+      return;
+    }
+    const text = selection.toString();
+    document.execCommand("insertHTML", false, `<pre><code>${text ? escapeHtml(text) : "<br>"}</code></pre>`);
+    const pre = closestElement(selection.anchorNode, "pre", area);
+    if (pre) moveCaretToEnd(pre.querySelector("code") || pre);
+    emitChange();
+  }
+
+  function handlePaste(event) {
+    const text = event.clipboardData?.getData("text/plain");
+    if (text === undefined) return;
+    event.preventDefault();
+    areaRef.current?.focus();
+    document.execCommand("insertText", false, text);
+    emitChange();
+  }
+
+  function handleDrop(event) {
+    const text = event.dataTransfer?.getData("text/plain");
+    if (text === undefined) return;
+    event.preventDefault();
+    areaRef.current?.focus();
+    document.execCommand("insertText", false, text);
+    emitChange();
+  }
+
+  return (
+    <div className={`basic-format-editor${disabled ? " is-disabled" : ""}`}>
+      <div className="basic-format-toolbar" aria-label="기본 서식 도구">
+        {templateEnabled && <button type="button" title="선택한 문구를 템플릿 변수로 지정" aria-label="템플릿 변수 삽입" disabled={disabled} onMouseDown={(event) => event.preventDefault()} onClick={insertTemplateVariable}>{"{}"}</button>}
+        <button type="button" title="굵게" aria-label="굵게" onMouseDown={(event) => event.preventDefault()} onClick={() => runCommand("bold")} disabled={disabled}>
+          <b>B</b>
+        </button>
+        <button type="button" title="글머리 기호" aria-label="글머리 기호" onMouseDown={(event) => event.preventDefault()} onClick={() => runCommand("insertUnorderedList")} disabled={disabled}>
+          <IconListBulleted />
+        </button>
+        <button type="button" title="숫자 글머리 기호" aria-label="숫자 글머리 기호" onMouseDown={(event) => event.preventDefault()} onClick={() => runCommand("insertOrderedList")} disabled={disabled}>
+          <IconListNumbered />
+        </button>
+        <button type="button" title="체크리스트" aria-label="체크리스트" className="basic-format-checklist" onMouseDown={(event) => event.preventDefault()} onClick={toggleChecklist} disabled={disabled}>
+          <IconChecklist />
+        </button>
+        <span className="basic-format-divider" aria-hidden="true" />
+        <button type="button" title="코드 블록" aria-label="코드 블록" aria-pressed={inCodeBlock} className={inCodeBlock ? "is-active" : ""} disabled={disabled} onMouseDown={(event) => event.preventDefault()} onClick={insertCodeBlock}><code>&lt;/&gt;</code></button>
+        <button type="button" title="코드 밖으로 (Ctrl+Enter)" aria-label="코드 밖으로" disabled={disabled || !inCodeBlock} onMouseDown={(event) => event.preventDefault()} onClick={() => exitCodeBlock()}>코드 밖으로</button>
+        <button type="button" title="작은 글자" aria-label="작은 글자" className={`basic-format-size basic-format-size--small${activeSize === "small" ? " is-active" : ""}`} onMouseDown={(event) => event.preventDefault()} onClick={() => applySize("small")} disabled={disabled}>
+          작게
+        </button>
+        <button type="button" title="보통 글자" aria-label="보통 글자" className={`basic-format-size${activeSize === "normal" ? " is-active" : ""}`} onMouseDown={(event) => event.preventDefault()} onClick={() => applySize("normal")} disabled={disabled}>
+          보통
+        </button>
+        <button type="button" title="큰 글자" aria-label="큰 글자" className={`basic-format-size basic-format-size--large${activeSize === "large" ? " is-active" : ""}`} onMouseDown={(event) => event.preventDefault()} onClick={() => applySize("large")} disabled={disabled}>
+          크게
+        </button>
+      </div>
+      <div
+        ref={areaRef}
+        className="basic-format-area"
+        contentEditable={!disabled}
+        suppressContentEditableWarning
+        data-placeholder={placeholder}
+        role="textbox"
+        aria-label={ariaLabel}
+        aria-multiline="true"
+        onInput={emitChange}
+        onKeyDown={handleKeyDown}
+        onBlur={emitChange}
+        onClick={handleAreaClick}
+        onPaste={handlePaste}
+        onDrop={handleDrop}
+      />
+    </div>
+  );
+}
