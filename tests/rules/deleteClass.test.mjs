@@ -1,40 +1,31 @@
-// =============================================================
-// 반 삭제 — 하위 데이터가 하나도 남지 않는지 확인
-//
-// Firestore는 부모 문서를 지워도 하위 컬렉션을 함께 지우지 않습니다.
-// 그래서 "반 문서를 지웠으니 끝"이라고 생각하면 출석부·자리표·기본 모둠·
-// 손들기가 그대로 남고, 그 안에는 학생 실명과 학번이 들어 있습니다.
-//
-// 이 테스트는 반 하나에 딸릴 수 있는 모든 자료를 심어 놓고 지운 뒤,
-// (1) 정말 하나도 남지 않는지 (2) 다른 반과 교사 자료는 멀쩡한지를 봅니다.
-// 컬렉션이 새로 늘었는데 purgeClass.js에 추가하는 것을 잊으면 여기서 걸립니다.
-//
-// 규칙이 아니라 Cloud Functions 코드를 검사하므로 admin SDK를 씁니다
-// (규칙을 우회하는 서버 로직이라 rules-unit-testing으로는 확인할 수 없음).
-// =============================================================
+// 실제 클라이언트와 같은 삭제 오케스트레이션·Firestore 어댑터를 보안 규칙 아래 실행합니다.
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { createRequire } from "node:module";
+import { makeEnv, seed, asAdmin, asStudent } from "./helpers.mjs";
+import { purgeClassData } from "../../lib/dataDeletion.mjs";
+import { readFile } from "node:fs/promises";
 
-const require = createRequire(import.meta.url);
-const admin = require("firebase-admin");
-const { purgeClassData } = require("../../functions/purgeClass.js");
+// Keep the production adapter, resolving Firebase to this isolated test package.
+const adapterSource = (await readFile(new URL("../../lib/firestoreDeletion.mjs", import.meta.url), "utf8"))
+  .replace("\"firebase/firestore\"", JSON.stringify(import.meta.resolve("firebase/firestore")));
+const { createDeletionAdapter } = await import(`data:text/javascript;base64,${Buffer.from(adapterSource).toString("base64")}`);
 
 const PROJECT_ID = "demo-purge-test";
 const KEEP = "cKeep"; // 남아 있어야 하는 다른 반
 const GONE = "cGone"; // 지울 반
 
 describe("반 삭제 시 하위 데이터 정리", () => {
-  let app;
+  let env;
   let db;
+  let adapter;
+  const imageDeletes = [];
 
   before(async () => {
-    if (!process.env.FIRESTORE_EMULATOR_HOST) {
-      process.env.FIRESTORE_EMULATOR_HOST = "127.0.0.1:8080";
-    }
-    app = admin.initializeApp({ projectId: PROJECT_ID }, "purge-test");
-    db = app.firestore();
-
+    env = await makeEnv(PROJECT_ID);
+    db = asAdmin(env, "teacherA").firestore();
+    adapter = createDeletionAdapter(db, { deleteClassImages: async (id) => imageDeletes.push(id) });
+    await seed(env, async (db) => {
+    await db.doc("system/admin").set({ uid: "teacherA" });
     // ── 지울 반에 딸린 자료를 빠짐없이 심습니다 ──
     await db.doc(`classes/${GONE}`).set({ createdBy: "teacherA", archived: true, name: "지울 반" });
 
@@ -80,13 +71,19 @@ describe("반 삭제 시 하위 데이터 정리", () => {
     // 수업 자료는 반이 아니라 교사(ownerId)에 귀속 — 반을 지워도 남아야 합니다.
     await db.doc(`lessons/l1`).set({ ownerId: "teacherA", title: "수업 자료" });
 
-    // ── 실행 ──
-    const warnings = await purgeClassData(db, GONE);
-    assert.deepEqual(warnings, [], `파기 중 경고가 있으면 안 됩니다: ${JSON.stringify(warnings)}`);
+    await db.doc(`classJoinSecrets/${GONE}`).set({ joinCode: "123456" });
+    await db.doc("classJoinLookup/123456").set({ classId: GONE });
+    await db.doc("classJoinClaims/stu1").set({ classId: GONE });
+    await db.doc(`bookProjects/${GONE}`).set({ classId: GONE });
+    await db.doc("bookResources/r1").set({ classId: GONE });
+    await db.doc("bookHelpNotes/h1").set({ classId: GONE });
+    await db.doc("bookConfirmations/conf1").set({ classId: GONE });
+    });
+    await purgeClassData(adapter, GONE);
   });
 
   after(async () => {
-    await app.delete();
+    await env?.cleanup();
   });
 
   const gone = async (path) => {
@@ -143,8 +140,28 @@ describe("반 삭제 시 하위 데이터 정리", () => {
     await kept("lessons/l1");
   });
 
+  it("가입 코드와 프로젝트·확인 자료가 남지 않는다", async () => {
+    for (const path of [`classJoinSecrets/${GONE}`, "classJoinLookup/123456", "classJoinClaims/stu1", `bookProjects/${GONE}`, "bookResources/r1", "bookHelpNotes/h1", "bookConfirmations/conf1"]) await gone(path);
+    assert.ok(imageDeletes.includes(GONE));
+  });
+
+  it("학생은 반 삭제를 시작할 수 없다", async () => {
+    const studentAdapter = createDeletionAdapter(asStudent(env, "stu9").firestore(), { deleteClassImages: async () => { throw new Error("must not reach storage"); } });
+    await assert.rejects(purgeClassData(studentAdapter, KEEP), /permission|permissions/i);
+    await kept(`classes/${KEEP}`);
+  });
+
+  it("Storage 삭제 실패는 반 문서를 보존하고 재시도가 완료된다", async () => {
+    const failingAdapter = createDeletionAdapter(db, { deleteClassImages: async () => { throw new Error("storage unavailable"); } });
+    await assert.rejects(purgeClassData(failingAdapter, KEEP), /storage unavailable/);
+    await kept(`classes/${KEEP}`);
+    assert.equal((await db.doc(`classes/${KEEP}`).get()).data().archived, true);
+    await purgeClassData(adapter, KEEP);
+    await gone(`classes/${KEEP}`);
+    await gone(`classes/${KEEP}/attendanceRecords/2026-08-23_stu9`);
+  });
+
   it("이미 지워진 반에 다시 실행해도 안전하다 (멱등)", async () => {
-    const warnings = await purgeClassData(db, GONE);
-    assert.deepEqual(warnings, []);
+    await purgeClassData(adapter, GONE);
   });
 });

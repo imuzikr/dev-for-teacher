@@ -54,9 +54,11 @@ describe("기존 출석 기록 규칙", () => {
     await assertFails(setDoc(doc(asAdmin(env, "admin1").firestore(), ...path), data));
   });
 
-  it("클라이언트에서는 기존 기록을 수정하거나 삭제할 수 없다", async () => {
+  it("기존 기록 수정은 금지하고 등록 관리자만 삭제할 수 있다", async () => {
     const adminDb = asAdmin(env, "admin1").firestore();
     await assertFails(setDoc(doc(adminDb, ...RECORD_PATH), { classId: "cA", uid: "stu1", date: "changed" }));
-    await assertFails(deleteDoc(doc(adminDb, ...RECORD_PATH)));
+    await assertFails(deleteDoc(doc(asStudent(env, "stu1").firestore(), ...RECORD_PATH)));
+    await assertFails(deleteDoc(doc(asAdmin(env, "otherAdmin").firestore(), ...RECORD_PATH)));
+    await assertSucceeds(deleteDoc(doc(adminDb, ...RECORD_PATH)));
   });
 });

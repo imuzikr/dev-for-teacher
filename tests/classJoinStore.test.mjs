@@ -45,12 +45,14 @@ async function loadStore(configured = true, initial = {}, generatedCodes = []) {
     getDocs: async (target) => {
       reads.push(target.path);
       return { docs: [...data].filter(([path, value]) => path.startsWith(`${target.path}/`)
+        && path.split("/").length === target.path.split("/").length + 1
         && (target.filters ?? []).every(([field, , expected]) => value[field] === expected))
         .map(([path, value]) => snapshot(path, value)) };
     },
     serverTimestamp: () => "SERVER_TIMESTAMP",
     deleteField: () => deleted,
     deleteDoc: async (target) => commit([["delete", target]]),
+    updateDoc: async (target, value) => commit([["update", target, value]]),
     setDoc: async (target, value) => commit([["set", target, value]]),
     onSnapshot: (target, ...args) => {
       const next = args.find((arg) => typeof arg === "function");
@@ -86,8 +88,18 @@ async function loadStore(configured = true, initial = {}, generatedCodes = []) {
       return bytes;
     },
   } });
+  const deletion = new vm.SourceTextModule(readFileSync(new URL("../lib/dataDeletion.mjs", import.meta.url), "utf8"), { context });
+  await deletion.link(() => {});
+  await deletion.evaluate();
+  const adapter = new vm.SourceTextModule(readFileSync(new URL("../lib/firestoreDeletion.mjs", import.meta.url), "utf8"), { context });
+  await adapter.link(() => new vm.SyntheticModule(Object.keys(firestore), function () {
+    for (const [name, value] of Object.entries(firestore)) this.setExport(name, value);
+  }, { context }));
+  await adapter.evaluate();
   const module = new vm.SourceTextModule(source, { context });
   await module.link((specifier) => {
+    if (specifier === "./dataDeletion.mjs") return deletion;
+    if (specifier === "./firestoreDeletion.mjs") return adapter;
     const match = [...source.matchAll(/import\s*\{([^}]+)\}\s*from\s*"([^"]+)"/g)]
       .find((item) => item[2] === specifier);
     const names = match[1].split(",").map((name) => name.trim()).filter(Boolean);
@@ -286,4 +298,55 @@ test("own-card subscription requires scoped board IDs and clears denied boards",
   assert.equal(rows.length, 0);
   stop();
   assert.equal(h.listeners[0].stopped, true);
+});
+
+test("demo class deletion clears attendance, seats, groups and memberships without touching another class", async () => {
+  const h = await loadStore(false);
+  const snapshots = { attendance: {}, seats: {}, groups: {} };
+  for (const classId of ["cl1", "cl3"]) {
+    await h.api.markStudyAttendance(classId, student, "2026-09-12");
+    await h.api.saveStudySeatLayout(classId, "default", [student.uid], admin);
+    await h.api.saveStudyGroupAssignment(classId, [{ members: [{ uid: student.uid, name: "Student" }] }], admin);
+    h.api.subscribeClassStudyAttendance(classId, rows => { snapshots.attendance[classId] = rows; });
+    h.api.subscribeStudySeatLayout(classId, "default", row => { snapshots.seats[classId] = row; });
+    h.api.subscribeStudyGroupAssignment(classId, row => { snapshots.groups[classId] = row; });
+  }
+  await h.api.joinClassByCode("111111", student);
+  let memberships;
+  h.api.subscribeMyMemberships(student.uid, rows => { memberships = rows; }, ["cl1", "cl3"]);
+  assert.equal(snapshots.attendance.cl1.length, 1);
+  assert.equal(snapshots.seats.cl1.seats[0], student.uid);
+  assert.equal(snapshots.groups.cl1.groups[0].members[0].uid, student.uid);
+  await h.api.deleteClass("cl1");
+  assert.equal(snapshots.attendance.cl1.length, 0);
+  assert.equal(snapshots.seats.cl1, null);
+  assert.equal(snapshots.groups.cl1, null);
+  assert.equal(memberships.some(row => row.classId === "cl1"), false);
+  assert.equal(snapshots.attendance.cl3.length, 1);
+  assert.equal(snapshots.seats.cl3.seats[0], student.uid);
+  assert.equal(snapshots.groups.cl3.groups[0].members[0].uid, student.uid);
+  await h.api.deleteClass("cl1");
+  assert.equal(snapshots.attendance.cl3.length, 1);
+});
+
+test("demo student deletion refreshes the directory and honors unsubscribe", async () => {
+  const h = await loadStore(false);
+  let rows;
+  let calls = 0;
+  const stop = h.api.subscribeUserDirectory(value => { rows = value; calls += 1; });
+  const target = rows.find(row => row.realName === "김민준");
+  assert.ok(target);
+  const before = rows.length;
+  assert.ok(h.api.getDirectoryUser(target.uid));
+  await h.api.deleteStudent(target.uid);
+  assert.equal(rows.some(row => row.uid === target.uid), false);
+  assert.equal(rows.length, before - 1);
+  assert.equal(h.api.getDirectoryUser(target.uid), null);
+  assert.equal(calls, 2);
+  await h.api.deleteStudent(target.uid);
+  assert.equal(rows.length, before - 1);
+  stop();
+  const afterStop = calls;
+  await h.api.deleteStudent(target.uid);
+  assert.equal(calls, afterStop);
 });

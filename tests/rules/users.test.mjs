@@ -3,7 +3,7 @@
 //
 // 학교 이름·성명이 여기에만 있는 단일 출처라, '누가' 쓰는지뿐 아니라
 // '어떤 필드를' 쓰는지까지 좁혀야 합니다. 특히 role은 클라이언트가 절대
-// 쓸 수 없어야 합니다 — 역할 부여는 서버 함수(setUserRole)만 합니다.
+// 스스로 올릴 수 없어야 합니다 — 역할 부여는 등록된 관리자만 합니다.
 // =============================================================
 import { describe, it, before, after, beforeEach } from "node:test";
 import { assertSucceeds, assertFails } from "@firebase/rules-unit-testing";
@@ -26,13 +26,13 @@ describe("사용자 프로필 규칙", () => {
     await env.clearFirestore();
     await seed(env, async (db) => {
       await setDoc(doc(db, "users", "stu1"), {
-        uid: "stu1", role: "student", realName: "학생A", schoolName: "한성고",
+        uid: "stu1", role: "student", realName: "학생A", schoolName: "예제 고등학교",
       });
       await setDoc(doc(db, "users", "teacherA"), {
-        uid: "teacherA", role: "teacher", realName: "김선생", schoolName: "한성고",
+        uid: "teacherA", role: "teacher", realName: "김선생", schoolName: "예제 고등학교",
       });
       await setDoc(doc(db, "users", "teacherB"), {
-        uid: "teacherB", role: "teacher", realName: "박선생", schoolName: "한성고",
+        uid: "teacherB", role: "teacher", realName: "박선생", schoolName: "예제 고등학교",
       });
       await setDoc(doc(db, "users", "rootAdmin"), { uid: "rootAdmin", role: "student" });
       await setDoc(doc(db, "system", "admin"), { uid: "rootAdmin", createdAt: new Date() });

@@ -1,6 +1,6 @@
 import { describe, it, before, after, beforeEach } from "node:test";
 import { assertFails, assertSucceeds, initializeTestEnvironment } from "@firebase/rules-unit-testing";
-import { doc, setDoc } from "firebase/firestore";
+import { doc, setDoc, deleteDoc } from "firebase/firestore";
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -25,14 +25,14 @@ function emulatorTarget(name, fallbackPort) {
 function asTeacher(env, uid) {
   return env.authenticatedContext(uid, {
     role: "teacher",
-    email: `${uid}@hansung.hs.kr`,
+    email: `${uid}@example.test`,
     email_verified: true,
   });
 }
 
 function asUser(env, uid) {
   return env.authenticatedContext(uid, {
-    email: `${uid}@hansung.hs.kr`,
+    email: `${uid}@example.test`,
     email_verified: true,
   });
 }
@@ -46,7 +46,7 @@ function projectImagePath(classId, ownerUid, imageHash = hash) {
   return `book-project-images/${classId}/${ownerUid}/${imageHash}.jpg`;
 }
 
-describe("개발자실 프로젝트 Storage 이미지 규칙", { skip: !process.env.FIREBASE_STORAGE_EMULATOR_HOST }, () => {
+describe("개발자실 프로젝트 Storage 이미지 규칙", () => {
   let env;
 
   before(async () => {
@@ -119,6 +119,32 @@ describe("개발자실 프로젝트 Storage 이미지 규칙", { skip: !process.
     await assertSucceeds(asTeacher(env, "teacherA").storage(bucketUrl).ref(path).putString(image, "data_url", { contentType: "image/jpeg" }));
     await assertSucceeds(storageRef(env, "studentA", path).getDownloadURL());
     await assertFails(storageRef(env, "studentB", path).getDownloadURL());
+  });
+
+  it("only the registered admin can list and delete class images, including archived classes", async () => {
+    const path = projectImagePath("cA", "teacherA", hashFor("7"));
+    const teacherRef = asTeacher(env, "teacherA").storage(bucketUrl).ref(path);
+    await assertSucceeds(teacherRef.putString(image, "data_url", { contentType: "image/jpeg" }));
+    await assertFails(asUser(env, "studentA").storage(bucketUrl).ref("book-project-images").listAll());
+    await assertFails(asTeacher(env, "teacherA").storage(bucketUrl).ref("book-project-images").listAll());
+    await assertFails(storageRef(env, "studentA", path).delete());
+    await assertFails(teacherRef.delete());
+    await env.withSecurityRulesDisabled((ctx) => setDoc(doc(ctx.firestore(), "classes", "cA"), { createdBy: "teacherA", archived: true }));
+    const adminStorage = asUser(env, "adminA").storage(bucketUrl);
+    await assertSucceeds(adminStorage.ref("book-project-images").listAll());
+    await assertSucceeds(adminStorage.ref(path).delete());
+    await assertFails(adminStorage.ref(path).getDownloadURL());
+  });
+
+  it("removing a deleted student's membership revokes image SDK access", async () => {
+    const path = projectImagePath("cA", "teacherA", hashFor("8"));
+    await assertSucceeds(asTeacher(env, "teacherA").storage(bucketUrl).ref(path).putString(image, "data_url", { contentType: "image/jpeg" }));
+    await assertSucceeds(storageRef(env, "studentA", path).getDownloadURL());
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), "deletedUsers", "studentA"), { deleted: true });
+      await deleteDoc(doc(ctx.firestore(), "memberships", "studentA_cA"));
+    });
+    await assertFails(storageRef(env, "studentA", path).getDownloadURL());
   });
 
   it("rejects non-owner, archived class, non-JPEG, oversized, and malformed path writes", async () => {

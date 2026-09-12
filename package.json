@@ -11,7 +11,8 @@
     "test:rules": "npm --prefix tests/rules test",
     "test:checklist": "node --experimental-vm-modules --test tests/activityChecklist.test.mjs tests/bookConfirmations.test.mjs",
     "test:distribution": "node --experimental-vm-modules --test tests/distributionConfig.test.mjs",
-    "test:access": "npm --prefix tests/rules run test:access"
+    "test:access": "npm --prefix tests/rules run test:access",
+    "test:unit": "node --experimental-vm-modules --test --test-concurrency=1 tests/*.test.mjs"
   },
   "dependencies": {
     "firebase": "^11.9.0",

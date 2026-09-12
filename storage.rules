@@ -56,19 +56,19 @@ service firebase.storage {
       return signedIn()
              && uid() == ownerUid
              && validImageWrite(imageName)
-             && classData.get('archived', false) != true
-             && (
-                  classData.createdBy == uid()
-                  ? (
-                      hasApprovedOwnerRole()
-                    )
-                  : isSystemAdmin()
-                );
+             && (classData.get('archived', false) == true
+                  ? isSystemAdmin()
+                  : (classData.createdBy == uid() ? hasApprovedOwnerRole() : isSystemAdmin()));
     }
 
     match /book-project-images/{classId}/{ownerUid}/{imageName} {
       allow read: if canReadClassImage(classId, ownerUid);
-      allow write: if resource == null && canWriteClassImage(classId, ownerUid, imageName);
+      allow create: if resource == null && canWriteClassImage(classId, ownerUid, imageName);
+      allow delete: if isSystemAdmin();
+    }
+
+    match /book-project-images/{imagePath=**} {
+      allow list: if isSystemAdmin();
     }
 
     match /{allPaths=**} {

@@ -34,9 +34,10 @@ async function loadModules(firebase = false, { uploadFails = false } = {}) {
     "./classPurpose": stub({ CLASS_PURPOSE_INTERNAL: "internal", getClassPurpose: () => "internal", normalizeClassPurpose: () => "internal" }),
     "./user": stub({ getCurrentUser: () => null, isAdmin: () => false }),
     "./storageUpload": stub({ deleteAttachedFiles: async () => {} }),
-    "./bookProjectStorage": stub({ uploadBookProjectImages: async (_user, { steps }) => steps }),
+    "./dataDeletion.mjs": stub({ purgeClassData: async () => { throw new Error("Unexpected class deletion"); }, purgeStudentData: async () => { throw new Error("Unexpected student deletion"); } }),
+    "./firestoreDeletion.mjs": stub({ createDeletionAdapter: () => { throw new Error("Unexpected deletion adapter"); } }),
     "./bookProjectImages": imageModule,
-    "./bookProjectStorage": stub({ uploadBookProjectImages: async (_user, { steps }) => {
+    "./bookProjectStorage": stub({ preserveCopiedClassImages: async () => {}, deleteClassProjectImages: async () => {}, deleteUserProjectImages: async () => {}, uploadBookProjectImages: async (_user, { steps }) => {
       uploads += 1;
       if (uploadFails) throw new Error("Image upload failed");
       const uploadItem = (item) => ({ ...item, images: item.images.map((url, index) => url.startsWith("data:") ? `https://example.com/storage/${item.id}/${index}.jpg` : url) });

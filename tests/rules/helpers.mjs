@@ -32,22 +32,22 @@ export async function makeEnv(projectId) {
 }
 
 // ── 로그인 컨텍스트 ──
-// 이 앱의 규칙은 role을 커스텀 클레임에서 읽습니다(users 문서가 아님).
-// email_verified는 초기 관리자 판정에 쓰이므로 항상 넣어 둡니다.
+// 교사 역할은 클레임 또는 users 프로필에서, 관리자는 system/admin UID에서 판정합니다.
+// 최초 관리자 등록 테스트는 별도로 Google 로그인 토큰을 제공합니다.
 export const asStudent = (env, uid) =>
-  env.authenticatedContext(uid, { email: `${uid}@hansung.hs.kr`, email_verified: true });
+  env.authenticatedContext(uid, { email: `${uid}@example.test`, email_verified: true });
 
 export const asTeacher = (env, uid) =>
   env.authenticatedContext(uid, {
     role: "teacher",
-    email: `${uid}@hansung.hs.kr`,
+    email: `${uid}@example.test`,
     email_verified: true,
   });
 
 export const asAdmin = (env, uid) =>
   env.authenticatedContext(uid, {
     role: "admin",
-    email: `${uid}@hansung.hs.kr`,
+    email: `${uid}@example.test`,
     email_verified: true,
   });
 
